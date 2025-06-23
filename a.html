@@ -80,22 +80,28 @@
 <body>
     <div class="container">
         <h1>Docker Commands for Some</h1>
-        
+
         <div class="command">
-            <div class="description">云服务器安装 Alist：</div>
-            <pre>docker run -d --restart=unless-stopped -v /etc/alistdata/alist:/opt/alist/data -p 5259:5244 -e PUID=0 -e PGID=0 -e UMASK=022 --name="alist-15" xhofe/alist:v3.44.0-aio</pre>
+            <div class="description">一键安装DOCKER：</div>
+            <pre>bash <(curl -sSL https://linuxmirrors.cn/docker.sh)</pre>
             <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
         </div>
 
         <div class="command">
-            <div class="description">Mac 安装 Alist：</div>
-            <pre>docker run -d --restart=unless-stopped -v $HOME/alistlan:/opt/alist/data -e PUID=0 -e PGID=0 -e UMASK=022 --name="alist-lan" xhofe/alist:v3.44.0-aio</pre>
+            <div class="description">云服务器安装 Openlist：</div>
+            <pre>docker run -d --restart=unless-stopped -v /etc/alistdata/alist:/opt/openlist/data -p 5244:5244 -e PUID=0 -e PGID=0 -e UMASK=022 --name="olist" openlistteam/openlist:beta</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+
+        <div class="command">
+            <div class="description">Mac 安装 Openlist：</div>
+            <pre>docker run -d --restart=unless-stopped -v $HOME/alist:/opt/openlist/data -e PUID=0 -e PGID=0 -e UMASK=022 --name="olist-lan" openlistteam/openlist:beta</pre>
             <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
         </div>
         
         <div class="command">
-            <div class="description">重设 Alist 密码：</div>
-            <pre>docker exec -it alist- ./alist admin set 888888</pre>
+            <div class="description">重设 Openlist 密码：</div>
+            <pre>docker exec -it alist- ./openlist admin set 888888</pre>
             <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
         </div>
         <div class="command">
@@ -285,7 +291,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 button.textContent = 'Copied!';
                 setTimeout(() => (button.textContent = 'Copy'), 2000);
             });
-        }
+        } 
 
         function toggleExpand(button) {
             const pre = button.previousElementSibling;
