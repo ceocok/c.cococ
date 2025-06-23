@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker Alist</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .command {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            position: relative;
+        }
+        .command pre {
+            margin: 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 100px;
+            overflow: hidden;
+            position: relative;
+        }
+        .command pre.expanded {
+            max-height: none;
+        }
+        .toggle-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            color: #007bff;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: underline;
+            padding: 0;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        .description {
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Docker Commands for Some</h1>
+        
+        <div class="command">
+            <div class="description">云服务器安装 Alist：</div>
+            <pre>docker run -d --restart=unless-stopped -v /etc/alistdata/alist:/opt/alist/data -p 5259:5244 -e PUID=0 -e PGID=0 -e UMASK=022 --name="alist-15" xhofe/alist:v3.44.0-aio</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+
+        <div class="command">
+            <div class="description">Mac 安装 Alist：</div>
+            <pre>docker run -d --restart=unless-stopped -v $HOME/alistlan:/opt/alist/data -e PUID=0 -e PGID=0 -e UMASK=022 --name="alist-lan" xhofe/alist:v3.44.0-aio</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+        
+        <div class="command">
+            <div class="description">重设 Alist 密码：</div>
+            <pre>docker exec -it alist- ./alist admin set 888888</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+        <div class="command">
+            <div class="description">CDMdaemon.json：</div>
+            <pre>cat << EOF | sudo tee /etc/docker/daemon.json
+{
+  "registry-mirrors": [
+    "http://0.0.0.0:50000"
+  ],
+  "insecure-registries": [
+    "0.0.0.0:50000"
+  ]
+}
+EOF
+
+</pre>
+                    <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                </div>    
+        <div class="command">
+            <div class="description">容器流量查看：</div>
+            <pre>docker run --rm -ti --name=ctop --volume /var/run/docker.sock:/var/run/docker.sock:ro quay.io/vektorlab/ctop:latest</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+        
+        <div class="command">
+            <div class="description">简中 Portainer 安装：</div>
+            <pre>docker run -d -p 9000:9000 --name portainer --restart always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_db:/data outlovecn/portainer-cn</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+
+        <div class="command">
+            <div class="description">容器安装详情查看：</div>
+            <pre>docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+
+        <div class="command">
+            <div class="description">filebrower安装：</div>
+            <pre>
+# 创建必要的目录和文件
+hurlenko/filebrowser 超轻方案 docker run -d --name filebrowser -p 8081:8080 hurlenko/filebrowser
+mkdir -p /home/filebrowser/root
+touch /home/filebrowser/filebrowser.db
+
+# 创建 settings.json 文件
+  cat << EOF | sudo tee /home/filebrowser/settings.json
+{
+  "port": 80,
+  "baseURL": "",
+  "address": "",
+  "log": "stdout",
+  "database": "/database/filebrowser.db",
+  "root": "/srv"
+}
+EOF
+
+# 设置文件权限
+chmod 644 /home/filebrowser/settings.json
+chmod 644 /home/filebrowser/filebrowser.db
+chmod 755 /home/filebrowser/root
+
+# 运行 Filebrowser 容器
+docker run -d \
+  --restart always \
+  -v /home/filebrowser/root:/srv \
+  -v /home/filebrowser/filebrowser.db:/database/filebrowser.db \
+  -v /home/filebrowser/settings.json:/config/settings.json \
+  -e PUID=$(id -u) \
+  -e PGID=$(id -g) \
+  -p 8088:80 \
+  --name filebrowser \
+  filebrowser/filebrowser:s6
+</pre>
+            <button class="toggle-btn" onclick="toggleExpand(this)">Expand</button>            
+<button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+
+        <div class="command">
+            <div class="description">docker镜像：</div>
+            <pre>cat << EOF | sudo tee /etc/docker/daemon.json
+{
+  "registry-mirrors": [
+    "https://docker.1panel.live",
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me"
+  ]
+}
+EOF
+
+</pre>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+        <div class="command">
+            <div class="description">Alist 公告代码：</div>
+            <pre>
+&lt;script&gt;
+document.addEventListener("DOMContentLoaded", function() {
+    let modal = document.createElement("div");
+    modal.style.position = "fixed";
+    modal.style.top = "0";
+    modal.style.left = "0";
+    modal.style.width = "100%";
+    modal.style.height = "100%";
+    modal.style.backgroundColor = "rgba(0, 0, 0, 0.3)";
+    modal.style.backdropFilter = "blur(10px)";
+    modal.style.display = "flex";
+    modal.style.justifyContent = "center";
+    modal.style.alignItems = "center";
+    modal.style.zIndex = "9999";
+
+    let modalContent = document.createElement("div");
+    modalContent.style.padding = "20px";
+    modalContent.style.borderRadius = "20px";
+    modalContent.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.2)";
+    modalContent.style.textAlign = "center";
+    modalContent.style.width = "320px";
+    modalContent.style.border = "1px solid rgba(255, 255, 255, 0.3)";
+    modalContent.style.transition = "all 0.3s ease-in-out";
+
+    function updateTheme() {
+        let isDark = document.documentElement.classList.contains("dark");
+        if (isDark) {
+            modalContent.style.background = "rgba(0, 0, 0, 0.6)";
+            modalContent.style.color = "#fff";
+        } else {
+            modalContent.style.background = "rgba(255, 255, 255, 0.7)";
+            modalContent.style.color = "#333";
+        }
+    }
+    updateTheme();
+    new MutationObserver(updateTheme).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"]
+    });
+
+    let title = document.createElement("h2");
+    title.innerHTML = "欢迎使用Alist";
+    title.style.fontSize = "22px";
+    title.style.marginBottom = "10px";
+
+    let message = document.createElement("p");
+    message.innerHTML = "✨ 感谢你支持星网科技的Alist网盘，有什么问题请及时告知，推荐使用天翼云盘，无须会员可达满速";
+    message.style.fontSize = "16px";
+    message.style.marginBottom = "20px";
+
+    let closeButton = document.createElement("button");
+    closeButton.innerText = "我知道啦！";
+    closeButton.style.padding = "10px 20px";
+    closeButton.style.border = "none";
+    closeButton.style.backgroundColor = "#30a3e6";
+    closeButton.style.color = "white";
+    closeButton.style.borderRadius = "10px";
+    closeButton.style.fontSize = "16px";
+    closeButton.style.cursor = "pointer";
+    closeButton.style.transition = "all 0.3s";
+    closeButton.onmouseover = function() {
+        closeButton.style.backgroundColor = "#F50057";
+    };
+    closeButton.onmouseout = function() {
+        closeButton.style.backgroundColor = "#30a3e6";
+    };
+
+    closeButton.addEventListener("click", function() {
+        modal.style.display = "none";
+    });
+
+    modalContent.appendChild(title);
+    modalContent.appendChild(message);
+    modalContent.appendChild(closeButton);
+    modal.appendChild(modalContent);
+    document.body.appendChild(modal);
+});
+&lt;/script&gt;
+            </pre>
+            <button class="toggle-btn" onclick="toggleExpand(this)">Expand</button>
+            <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+        </div>
+    </div>
+
+    <script>
+        function copyToClipboard(button) {
+            // 确保选择正确的 <pre> 元素
+            const pre = button.closest('.command').querySelector('pre');
+            const command = pre.innerText.trim();
+            navigator.clipboard.writeText(command).then(() => {
+                button.textContent = 'Copied!';
+                setTimeout(() => (button.textContent = 'Copy'), 2000);
+            });
+        }
+
+        function toggleExpand(button) {
+            const pre = button.previousElementSibling;
+            pre.classList.toggle('expanded');
+            button.textContent = pre.classList.contains('expanded') ? 'Collapse' : 'Expand';
+        }
+    </script>
+</body>
+</html>
