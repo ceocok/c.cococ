@@ -1,5 +1,5 @@
 #!/bin/bash
-# SOCKS5代理服务器自动部署脚本
+# SOCKS5代理服务器自动部署脚本（IPv6支持）
 
 # 检测root权限
 if [ "$EUID" -ne 0 ]; then
@@ -10,7 +10,7 @@ fi
 # 安装依赖
 echo "🔧 安装必要组件..."
 apt update &> /dev/null
-apt install -y dante-server netcat-openbsd &> /dev/null
+apt install -y dante-server netcat-openbsd curl &> /dev/null
 
 # 配置参数
 read -p "🛡️ 输入代理端口 (默认1080): " PORT
@@ -28,29 +28,42 @@ while [[ -z "$PASSWORD" ]]; do
     echo
 done
 
+# 获取默认接口名称
+INTERFACE=$(ip -6 route | awk '/default/ {print $5; exit}')
+
 # 生成配置文件
 echo "📝 生成Dante配置文件..."
-INTERFACE=$(ip route | awk '/default/ {print $5}')
 cat > /etc/danted.conf <<EOF
 logoutput: syslog
 internal: 0.0.0.0 port = $PORT
+internal: :: port = $PORT
 external: $INTERFACE
 method: username
 user.privileged: root
 user.unprivileged: nobody
+
 client pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
     log: connect disconnect
 }
+client pass {
+    from: ::/0 to: ::/0
+    log: connect disconnect
+}
+
 socks pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
+    log: connect disconnect
+}
+socks pass {
+    from: ::/0 to: ::/0
     log: connect disconnect
 }
 EOF
 
 # 创建认证用户
 echo "👥 创建系统用户..."
-useradd -r -s /bin/false $USERNAME
+id "$USERNAME" &>/dev/null || useradd -r -s /bin/false "$USERNAME"
 echo "$USERNAME:$PASSWORD" | chpasswd
 
 # 防火墙配置
@@ -70,9 +83,12 @@ systemctl enable danted &> /dev/null
 # 验证安装
 echo "✅ 安装完成，测试连接..."
 if nc -zv localhost $PORT &> /dev/null; then
+    IPV4=$(curl -s4 ifconfig.me)
+    IPV6=$(curl -s6 ifconfig.me)
     echo "================================"
     echo "SOCKS5代理服务器已就绪"
-    echo "地址: $(curl -s ifconfig.me)"
+    echo "IPv4地址: $IPV4"
+    echo "IPv6地址: $IPV6"
     echo "端口: $PORT"
     echo "认证: $USERNAME:$PASSWORD"
     echo "================================"
@@ -80,4 +96,3 @@ else
     echo "❌ 服务启动失败，请检查配置" >&2
     exit 1
 fi
-
