@@ -142,15 +142,15 @@ fi
 }
 
 checktls(){
-if [[ -f /root/ygkkkca/cert.crt && -f /root/ygkkkca/private.key ]] && [[ -s /root/ygkkkca/cert.crt && -s /root/ygkkkca/private.key ]]; then
+if [[ -f /root/coca/cert.crt && -f /root/coca/private.key ]] && [[ -s /root/coca/cert.crt && -s /root/coca/private.key ]]; then
 cronac
-green "域名证书申请成功或已存在！域名证书（cert.crt）和密钥（private.key）已保存到 /root/ygkkkca文件夹内" 
+green "域名证书申请成功或已存在！域名证书（cert.crt）和密钥（private.key）已保存到 /root/coca文件夹内" 
 yellow "公钥文件crt路径如下，可直接复制"
-green "/root/ygkkkca/cert.crt"
+green "/root/coca/cert.crt"
 yellow "密钥文件key路径如下，可直接复制"
-green "/root/ygkkkca/private.key"
+green "/root/coca/private.key"
 ym=`bash ~/.acme.sh/acme.sh --list | tail -1 | awk '{print $1}'`
-echo $ym > /root/ygkkkca/ca.log
+echo $ym > /root/coca/ca.log
 if [[ -f '/etc/hysteria/config.json' ]]; then
 blue "检测到Hysteria-1代理协议，如果你安装了甬哥的Hysteria脚本，请在Hysteria脚本执行申请/变更证书，此证书将自动应用"
 fi
@@ -168,19 +168,19 @@ blue "检测到Sing-box内核代理，如果你安装了甬哥的Sing-box脚本�
 fi
 else
 bash ~/.acme.sh/acme.sh --uninstall >/dev/null 2>&1
-rm -rf /root/ygkkkca
+rm -rf /root/coca
 rm -rf ~/.acme.sh acme.sh
 uncronac
 red "遗憾，域名证书申请失败，建议如下："
 yellow "一、更换下二级域名自定义名称再尝试执行重装脚本（重要）"
-green "例：原二级域名 x.ygkkk.eu.org 或 x.ygkkk.cf ，在cloudflare中重命名其中的x名称"
+green "例：原二级域名 x.cococ.eu.org 或 x.cococ.cf ，在cloudflare中重命名其中的x名称"
 echo
 yellow "二：因为同个本地IP连续多次申请证书有时间限制，等一段时间再重装脚本" && exit
 fi
 }
 
 installCA(){
-bash ~/.acme.sh/acme.sh --install-cert -d ${ym} --key-file /root/ygkkkca/private.key --fullchain-file /root/ygkkkca/cert.crt --ecc
+bash ~/.acme.sh/acme.sh --install-cert -d ${ym} --key-file /root/coca/private.key --fullchain-file /root/coca/cert.crt --ecc
 }
 
 checkip(){
@@ -347,7 +347,7 @@ fi
 }
 
 acme(){
-mkdir -p /root/ygkkkca
+mkdir -p /root/coca
 ab="1.选择独立80端口模式申请证书（仅需域名，小白推荐），安装过程中将强制释放80端口\n2.选择DNS API模式申请证书（需域名、ID、Key），自动识别单域名与泛域名\n0.返回上一层\n 请选择："
 readp "$ab" cd
 case "$cd" in 
@@ -365,7 +365,7 @@ bash ~/.acme.sh/acme.sh --list
 #if [[ -n $(bash ~/.acme.sh/acme.sh --list | grep $ym) ]]; then
 #bash ~/.acme.sh/acme.sh --revoke -d ${ym} --ecc
 #bash ~/.acme.sh/acme.sh --remove -d ${ym} --ecc
-#rm -rf /root/ygkkkca
+#rm -rf /root/coca
 #green "撤销并删除${ym}域名证书成功"
 #else
 #red "未找到你输入的${ym}域名证书，请自行核实！" && exit
@@ -375,7 +375,7 @@ bash ~/.acme.sh/acme.sh --list
 acmeshow(){
 if [[ -n $(~/.acme.sh/acme.sh -v 2>/dev/null) ]]; then
 caacme1=`bash ~/.acme.sh/acme.sh --list | tail -1 | awk '{print $1}'`
-if [[ -n $caacme1 && ! $caacme1 == "Main_Domain" ]] && [[ -f /root/ygkkkca/cert.crt && -f /root/ygkkkca/private.key && -s /root/ygkkkca/cert.crt && -s /root/ygkkkca/private.key ]]; then
+if [[ -n $caacme1 && ! $caacme1 == "Main_Domain" ]] && [[ -f /root/coca/cert.crt && -f /root/coca/private.key && -s /root/coca/cert.crt && -s /root/coca/private.key ]]; then
 caacme=$caacme1
 else
 caacme='无证书申请记录'
@@ -426,7 +426,7 @@ uninstall(){
 [[ -z $(~/.acme.sh/acme.sh -v 2>/dev/null) ]] && yellow "未安装acme.sh证书申请，无法执行" && exit 
 curl https://get.acme.sh | sh
 bash ~/.acme.sh/acme.sh --uninstall
-rm -rf /root/ygkkkca
+rm -rf /root/coca
 rm -rf ~/.acme.sh acme.sh
 sed -i '/acme.sh.env/d' ~/.bashrc 
 source ~/.bashrc
@@ -435,26 +435,14 @@ uncronac
 }
 
 clear
-green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-echo -e "${bblue} ░██     ░██      ░██ ██ ██         ░█${plain}█   ░██     ░██   ░██     ░█${red}█   ░██${plain}  "
-echo -e "${bblue}  ░██   ░██      ░██    ░░██${plain}        ░██  ░██      ░██  ░██${red}      ░██  ░██${plain}   "
-echo -e "${bblue}   ░██ ░██      ░██ ${plain}                ░██ ██        ░██ █${red}█        ░██ ██  ${plain}   "
-echo -e "${bblue}     ░██        ░${plain}██    ░██ ██       ░██ ██        ░█${red}█ ██        ░██ ██  ${plain}  "
-echo -e "${bblue}     ░██ ${plain}        ░██    ░░██        ░██ ░██       ░${red}██ ░██       ░██ ░██ ${plain}  "
-echo -e "${bblue}     ░█${plain}█          ░██ ██ ██         ░██  ░░${red}██     ░██  ░░██     ░██  ░░██ ${plain}  "
-green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
-white "甬哥Github项目  ：github.com/yonggekkk"
-white "甬哥blogger博客 ：ygkkk.blogspot.com"
-white "甬哥YouTube频道 ：www.youtube.com/@ygkkk"
-yellow "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
-green "Acme-yg脚本版本号 V2023.12.18"
+green "Acme脚本版本号 V2023.12.18"
 yellow "提示："
 yellow "一、脚本不支持多IP的VPS，SSH登录的IP与VPS共网IP必须一致"
 yellow "二、80端口模式仅支持单域名证书申请，在80端口不被占用的情况下支持自动续期"
 yellow "三、DNS API模式不支持freenom免费域名申请，支持单域名与泛域名证书申请，无条件自动续期"
 yellow "四、泛域名申请前须设置一个名称为 * 字符的解析记录 (输入格式：*.一级/二级主域)"
-yellow "公钥文件crt保存路径：/root/ygkkkca/cert.crt"
-yellow "密钥文件key保存路径：/root/ygkkkca/private.key"
+yellow "公钥文件crt保存路径：/root/coca/cert.crt"
+yellow "密钥文件key保存路径：/root/coca/private.key"
 echo
 red "========================================================================="
 acmeshow
