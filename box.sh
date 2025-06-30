@@ -1,23 +1,22 @@
 #!/bin/bash
 
-# 定义脚本来源地址前缀（raw.githubusercontent 的 CDN 地址）
 BASE_URL="https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
-# 功能列表
+# 有序功能菜单
 declare -A scripts=(
   ["1"]="Snell.sh"
-  ["2"]="bbr.sh"
-  ["3"]="dnsunlock.sh"
-  ["4"]="docker.sh"
-  ["5"]="frps.sh"
-  ["6"]="hy.sh"
-  ["7"]="kejilion.sh"
-  ["8"]="socks5.sh"
-  ["9"]="tool.sh"
-  ["10"]="unlock.sh"
-  ["11"]="v2ray.sh"
-  ["12"]="warp.sh"
-  ["13"]="yuan.sh"
+  ["2"]="v2ray.sh"
+  ["3"]="warp.sh"
+  ["4"]="hy.sh"
+  ["5"]="bbr.sh"
+  ["6"]="kejilion.sh"
+  ["7"]="tool.sh"
+  ["8"]="docker.sh"
+  ["9"]="yuan.sh"
+  ["10"]="dnsunlock.sh"
+  ["11"]="unlock.sh"
+  ["12"]="frps.sh"
+  ["13"]="socks5.sh"
   ["0"]="退出"
 )
 
@@ -38,6 +37,22 @@ run_script() {
   curl -fsSL "$url" -o /tmp/$script_name && chmod +x /tmp/$script_name && bash /tmp/$script_name
 }
 
+# v2ray 安装检测函数
+check_v2ray() {
+  if command -v v2ray >/dev/null 2>&1 || [ -f "/usr/bin/v2ray/v2ray" ]; then
+    echo "检测到 V2Ray 已安装。"
+    read -p "是否重新安装？[y/N]: " re
+    if [[ "$re" =~ ^[Yy]$ ]]; then
+      run_script "v2ray.sh"
+    else
+      echo "跳过安装 V2Ray。"
+    fi
+  else
+    echo "未检测到 V2Ray，准备安装..."
+    run_script "v2ray.sh"
+  fi
+}
+
 # 主逻辑
 while true; do
   show_menu
@@ -46,7 +61,11 @@ while true; do
     echo "退出工具箱，再见！"
     exit 0
   elif [[ -n "${scripts[$choice]}" ]]; then
-    run_script "${scripts[$choice]}"
+    if [[ "$choice" == "2" ]]; then
+      check_v2ray
+    else
+      run_script "${scripts[$choice]}"
+    fi
   else
     echo "无效的选项，请重新输入。"
   fi
