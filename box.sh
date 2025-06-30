@@ -39,7 +39,7 @@ declare -A scripts=(
 
 # 展示菜单
 show_menu() {
-  echo "========== 🧰 工具合集 =========="
+  echo "========== 🧰 ceocok工具合集 =========="
   for key in "${!script_names[@]}"; do
     echo "$key. ${script_names[$key]}"
   done | sort -n
