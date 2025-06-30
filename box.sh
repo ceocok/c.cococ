@@ -20,7 +20,7 @@ declare -A script_names=(
   ["0"]="退出"
 )
 
-# 脚本名与编号映射
+# 功能编号对应脚本名
 declare -A scripts=(
   ["1"]="Snell.sh"
   ["2"]="v2ray.sh"
@@ -37,9 +37,9 @@ declare -A scripts=(
   ["13"]="socks5.sh"
 )
 
-# 展示菜单
+# 显示菜单
 show_menu() {
-  echo "========== 🧰 ceocok工具合集 =========="
+  echo "========== 🧰 工具合集 =========="
   for key in "${!script_names[@]}"; do
     echo "$key. ${script_names[$key]}"
   done | sort -n
@@ -50,46 +50,60 @@ show_menu() {
 run_script() {
   local script_name="$1"
   local url="$BASE_URL/$script_name"
-  echo "正在下载并执行 $script_name ..."
-  curl -fsSL "$url" -o /tmp/$script_name && chmod +x /tmp/$script_name && bash /tmp/$script_name
+  echo "📥 正在下载并执行 $script_name ..."
+  curl -fsSL "$url" -o /tmp/$script_name
+  if [ $? -ne 0 ]; then
+    echo "❌ 下载失败，请检查网络或脚本路径：$url"
+    return 1
+  fi
+  chmod +x /tmp/$script_name
+  bash /tmp/$script_name
 }
 
-# v2ray 安装检测函数
+# v2ray 检测函数
 check_v2ray() {
   if command -v v2ray >/dev/null 2>&1 || [ -f "/usr/bin/v2ray/v2ray" ]; then
-    echo "✅ 检测到 V2Ray 已安装。"
+    echo "✅ 已检测到 V2Ray 已安装。"
     read -p "是否重新安装？[y/N]: " re
     if [[ "$re" =~ ^[Yy]$ ]]; then
       run_script "v2ray.sh"
     else
-      echo "跳过安装 V2Ray。"
+      echo "✔️ 已跳过 V2Ray 安装。"
     fi
   else
-    echo "❌ 未检测到 V2Ray，准备安装..."
+    echo "🔍 未检测到 V2Ray，开始安装..."
     run_script "v2ray.sh"
   fi
 }
 
-# 主逻辑
-while true; do
-  show_menu
-  read -p "请输入序号选择功能: " choice
-  if [[ "$choice" == "0" ]]; then
-    echo "👋 再见，退出工具箱！"
-    exit 0
-  elif [[ -n "${scripts[$choice]}" ]]; then
-    if [[ "$choice" == "2" ]]; then
-      check_v2ray
-    else
-      run_script "${scripts[$choice]}"
-    fi
-  else
-    echo "⚠️ 无效选项，请重新输入。"
+# 设置 box 快捷命令
+setup_shortcut() {
+  if [ ! -f "/usr/local/bin/box" ]; then
+    cp "$(realpath "$0")" /usr/local/bin/box
+    chmod +x /usr/local/bin/box
+    echo "✅ 已创建快捷命令：输入 box 可随时启动工具箱。"
   fi
-done
-# 自动设置快捷命令
-if [ ! -f "/usr/local/bin/box" ]; then
-  cp "$(realpath "$0")" /usr/local/bin/box
-  chmod +x /usr/local/bin/box
-  echo "✅ 工具箱已设置为快捷命令，输入 box 即可快速打开。"
-fi
+}
+
+# 主逻辑
+main() {
+  setup_shortcut
+  while true; do
+    show_menu
+    read -p "请输入功能序号: " choice
+    if [[ "$choice" == "0" ]]; then
+      echo "👋 再见，已退出工具箱！"
+      exit 0
+    elif [[ -n "${scripts[$choice]}" ]]; then
+      if [[ "$choice" == "2" ]]; then
+        check_v2ray
+      else
+        run_script "${scripts[$choice]}"
+      fi
+    else
+      echo "⚠️ 无效输入，请重新选择。"
+    fi
+  done
+}
+
+main
