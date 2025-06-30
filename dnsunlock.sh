@@ -33,13 +33,22 @@ else
         systemctl restart systemd-resolved
 
         echo "✅ DNS 设置完成。当前状态如下："
-        command -v resolvectl &>/dev/null && resolvectl status | grep 'DNS Servers\|Fallback DNS Servers'
+        if command -v systemd-resolve &>/dev/null; then
+            systemd-resolve --status | grep -A2 'DNS Servers'
+        elif command -v resolvectl &>/dev/null; then
+            resolvectl status | grep 'DNS Servers\|Fallback DNS Servers'
+        else
+            echo "⚠️ 无法获取 DNS 状态信息（缺少 systemd-resolve 或 resolvectl）"
+        fi
+
+        # 可选：测试 DNS 是否可用
+        echo -e "\n🌐 测试 DNS 查询 google.com ："
+        dig +short google.com || nslookup google.com
         exit 0
     fi
 fi
 
 # 通用 fallback 逻辑（直接写入 /etc/resolv.conf）
-
 echo "⚠️ 未检测到 systemd-resolved，直接配置 /etc/resolv.conf ..."
 
 # 处理不存在的 /etc/resolv.conf
@@ -63,3 +72,7 @@ echo "$DNS_CONTENT" > /etc/resolv.conf
 
 echo "✅ DNS 设置完成。当前内容如下："
 cat /etc/resolv.conf
+
+# 可选：测试 DNS 是否可用
+echo -e "\n🌐 测试 DNS 查询 google.com ："
+dig +short google.com || nslookup google.com
