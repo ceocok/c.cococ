@@ -17,6 +17,7 @@ declare -A script_names=(
   ["11"]="Alice 出口"
   ["12"]="安装 frps"
   ["13"]="安装 Socks5"
+  ["14"]="安装证书"
   ["0"]="退出"
 )
 
@@ -35,6 +36,7 @@ declare -A scripts=(
   ["11"]="unlock.sh"
   ["12"]="frps.sh"
   ["13"]="socks5.sh"
+  ["14"]="acme.sh"
 )
 
 # 显示菜单
