@@ -87,3 +87,9 @@ while true; do
     echo "⚠️ 无效选项，请重新输入。"
   fi
 done
+# 自动设置快捷命令
+if [ ! -f "/usr/local/bin/box" ]; then
+  cp "$(realpath "$0")" /usr/local/bin/box
+  chmod +x /usr/local/bin/box
+  echo "✅ 工具箱已设置为快捷命令，输入 box 即可快速打开。"
+fi
