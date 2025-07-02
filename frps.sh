@@ -28,24 +28,21 @@ FRP_DIR="/usr/local/frp"
 BIN_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/frp"
 
-echo "正在下载 frps v${FRP_VERSION}..."
-wget -O /tmp/frp.tar.gz "${FRP_URL}"
-
-echo "解压中..."
+# 下载并解压
+wget -O /tmp/frp.tar.gz "${FRP_URL}" >/dev/null 2>&1
 mkdir -p ${FRP_DIR}
-tar -zxvf /tmp/frp.tar.gz -C /tmp/
+tar -zxf /tmp/frp.tar.gz -C /tmp/
 cp -r /tmp/frp_${FRP_VERSION}_linux_amd64/* ${FRP_DIR}/
-
-# 安装可执行文件
 cp ${FRP_DIR}/frps ${BIN_DIR}/
 chmod +x ${BIN_DIR}/frps
 
-# 输入配置
+# 用户输入
 read -p "请输入webServer用户名(默认: admin): " WEB_USER
 WEB_USER=${WEB_USER:-admin}
 read -sp "请输入webServer密码: " WEB_PASS
 echo
 
+# 写配置
 mkdir -p ${CONFIG_DIR}
 cat > ${CONFIG_DIR}/frps.toml <<EOF
 bindAddr = "0.0.0.0"
@@ -58,7 +55,6 @@ EOF
 
 # 创建服务
 if [ "$OS" = "debian" ]; then
-    echo "配置 systemd 服务..."
     cat > /etc/systemd/system/frps.service <<EOF
 [Unit]
 Description=frp server
@@ -73,27 +69,22 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
-    systemctl enable frps
-    systemctl start frps
-    systemctl status frps
+    systemctl enable frps >/dev/null 2>&1
+    systemctl start frps >/dev/null 2>&1
 else
-    echo "配置 OpenRC 服务..."
     cat > /etc/init.d/frps <<EOF
 #!/sbin/openrc-run
 
 name="frps"
 description="FRP Server"
-command="${BIN_DIR}/frps"
-command_args="-c ${CONFIG_DIR}/frps.toml"
+command="/sbin/start-stop-daemon"
+command_args="--start --background --make-pidfile --pidfile /run/frps.pid --exec ${BIN_DIR}/frps -- -c ${CONFIG_DIR}/frps.toml"
 pidfile="/run/frps.pid"
 EOF
-
     chmod +x /etc/init.d/frps
-    rc-update add frps default
-    rc-service frps start
-    rc-service frps status
+    rc-update add frps default >/dev/null 2>&1
+    rc-service frps start >/dev/null 2>&1
 fi
 
-echo "✅ frps 安装完成"
+echo "✅ frps 安装成功并已在后台运行"
