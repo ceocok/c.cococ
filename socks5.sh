@@ -16,18 +16,6 @@ apt install -y dante-server netcat-openbsd curl &> /dev/null
 read -p "🛡️ 输入代理端口 (默认1080): " PORT
 PORT=${PORT:-1080}
 
-read -p "👤 输入认证用户名: " USERNAME
-while [[ -z "$USERNAME" ]]; do
-    read -p "❌ 用户名不能为空，请重新输入: " USERNAME
-done
-
-read -sp "🔑 输入认证密码: " PASSWORD
-echo
-while [[ -z "$PASSWORD" ]]; do
-    read -sp "❌ 密码不能为空，请重新输入: " PASSWORD
-    echo
-done
-
 # 获取默认接口名称
 INTERFACE=$(ip -6 route | awk '/default/ {print $5; exit}')
 
@@ -38,7 +26,7 @@ logoutput: syslog
 internal: 0.0.0.0 port = $PORT
 internal: :: port = $PORT
 external: $INTERFACE
-method: username
+method: none
 user.privileged: root
 user.unprivileged: nobody
 
@@ -61,10 +49,7 @@ socks pass {
 }
 EOF
 
-# 创建认证用户
-echo "👥 创建系统用户..."
-id "$USERNAME" &>/dev/null || useradd -r -s /bin/false "$USERNAME"
-echo "$USERNAME:$PASSWORD" | chpasswd
+# 下面去掉了创建系统用户和密码部分
 
 # 防火墙配置
 echo "🔥 配置防火墙..."
@@ -90,7 +75,7 @@ if nc -zv localhost $PORT &> /dev/null; then
     echo "IPv4地址: $IPV4"
     echo "IPv6地址: $IPV6"
     echo "端口: $PORT"
-    echo "认证: $USERNAME:$PASSWORD"
+    echo "认证: 无认证（免费）"
     echo "================================"
 else
     echo "❌ 服务启动失败，请检查配置" >&2
