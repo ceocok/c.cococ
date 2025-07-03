@@ -26,7 +26,8 @@ logoutput: syslog
 internal: 0.0.0.0 port = $PORT
 internal: :: port = $PORT
 external: $INTERFACE
-method: none
+clientmethod: none
+socksmethod: none
 user.privileged: root
 user.unprivileged: nobody
 
