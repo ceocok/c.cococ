@@ -16,8 +16,9 @@ apt install -y dante-server netcat-openbsd curl &> /dev/null
 read -p "🛡️ 输入代理端口 (默认1080): " PORT
 PORT=${PORT:-1080}
 
-# 获取默认接口名称
+# 获取默认接口名称（IPv6优先，失败则用IPv4）
 INTERFACE=$(ip -6 route | awk '/default/ {print $5; exit}')
+[ -z "$INTERFACE" ] && INTERFACE=$(ip route | awk '/default/ {print $5; exit}')
 
 # 生成配置文件
 echo "📝 生成Dante配置文件..."
@@ -49,8 +50,6 @@ socks pass {
     log: connect disconnect
 }
 EOF
-
-# 下面去掉了创建系统用户和密码部分
 
 # 防火墙配置
 echo "🔥 配置防火墙..."
