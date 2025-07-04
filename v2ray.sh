@@ -13,7 +13,7 @@ help=0
 
 remove=0
 
-chinese=0
+chinese=1
 
 base_source_path="https://multi.netlify.app"
 
