@@ -1,6 +1,7 @@
 #!/bin/bash
 
-BASE_URL="https://raw.githubusercontent.com/ceocok/c.cococ/main"
+# 加速代理前缀
+BASE_URL="https://cf.ceocok.workers.dev/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
 declare -A script_names=(
@@ -19,6 +20,7 @@ declare -A script_names=(
   ["13"]="安装 Socks5"
   ["14"]="安装证书"
   ["15"]="Alpine-vmess"
+  ["16"]="更新工具箱"
   ["0"]="退出"
 )
 
@@ -50,11 +52,11 @@ show_menu() {
   echo "=================================="
 }
 
-# 下载并执行脚本
+# 下载并执行脚本（通过 Cloudflare Worker 加速）
 run_script() {
   local script_name="$1"
   local url="$BASE_URL/$script_name"
-  echo "📥 正在下载并执行 $script_name ..."
+  echo "📥 正在通过加速代理下载并执行 $script_name ..."
   curl -fsSL "$url" -o /tmp/$script_name
   if [ $? -ne 0 ]; then
     echo "❌ 下载失败，请检查网络或脚本路径：$url"
@@ -89,6 +91,21 @@ setup_shortcut() {
   fi
 }
 
+# 自我更新
+update_self() {
+  local update_url="$BASE_URL/box.sh"
+  echo "🔄 正在通过加速代理更新 box 工具箱脚本..."
+  curl -fsSL "$update_url" -o "$0.tmp"
+  if [ $? -ne 0 ]; then
+    echo "❌ 更新失败，无法从：$update_url 下载"
+    return 1
+  fi
+  mv "$0.tmp" "$0"
+  chmod +x "$0"
+  echo "✅ box 工具箱已成功更新！请重新运行。"
+  exit 0
+}
+
 # 主逻辑
 main() {
   setup_shortcut
@@ -98,6 +115,8 @@ main() {
     if [[ "$choice" == "0" ]]; then
       echo "👋 再见，已退出工具箱！"
       exit 0
+    elif [[ "$choice" == "16" ]]; then
+      update_self
     elif [[ -n "${scripts[$choice]}" ]]; then
       if [[ "$choice" == "2" ]]; then
         check_v2ray
