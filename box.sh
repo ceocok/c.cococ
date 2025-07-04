@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 加速代理前缀
+# 原始链接前缀（已取消代理）
 BASE_URL="https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
@@ -20,7 +20,7 @@ declare -A script_names=(
   ["13"]="安装 Socks5"
   ["14"]="安装证书"
   ["15"]="Alpine-vmess"
-  ["16"]="更新工具箱"
+  ["16"]="更新 box 工具箱"
   ["0"]="退出"
 )
 
@@ -52,16 +52,26 @@ show_menu() {
   echo "=================================="
 }
 
-# 下载并执行脚本（通过 Cloudflare Worker 加速）
+# 下载并执行脚本，支持 curl 或 wget
 run_script() {
   local script_name="$1"
   local url="$BASE_URL/$script_name"
-  echo "📥 正在通过加速代理下载并执行 $script_name ..."
-  curl -fsSL "$url" -o /tmp/$script_name
+  echo "📥 正在下载并执行 $script_name ..."
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o /tmp/$script_name
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO /tmp/$script_name "$url"
+  else
+    echo "❌ 未找到 curl 或 wget，无法下载脚本。请先安装其中一个工具。"
+    return 1
+  fi
+
   if [ $? -ne 0 ]; then
     echo "❌ 下载失败，请检查网络或脚本路径：$url"
     return 1
   fi
+
   chmod +x /tmp/$script_name
   bash /tmp/$script_name
 }
@@ -94,12 +104,22 @@ setup_shortcut() {
 # 自我更新
 update_self() {
   local update_url="$BASE_URL/box.sh"
-  echo "🔄 正在通过加速代理更新 box 工具箱脚本..."
-  curl -fsSL "$update_url" -o "$0.tmp"
+  echo "🔄 正在更新 box 工具箱脚本..."
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$update_url" -o "$0.tmp"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$0.tmp" "$update_url"
+  else
+    echo "❌ 未找到 curl 或 wget，无法更新脚本。"
+    return 1
+  fi
+
   if [ $? -ne 0 ]; then
     echo "❌ 更新失败，无法从：$update_url 下载"
     return 1
   fi
+
   mv "$0.tmp" "$0"
   chmod +x "$0"
   echo "✅ box 工具箱已成功更新！请重新运行。"
