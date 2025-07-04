@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 加速代理前缀
-BASE_URL="https://cf.ceocok.workers.dev/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+BASE_URL="https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
 declare -A script_names=(
