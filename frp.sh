@@ -48,7 +48,7 @@ install_frps() {
     wget -qO "$FRP_DIR/fp-multiuser" "https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64"
     chmod +x "$FRP_DIR/fp-multiuser"
 
-    echo -e "${Yellow}请输入用户 = token（直接回车结束）：${Font}"
+    echo -e "${Yellow}请输入用户和token（直接回车结束）：${Font}"
     > "$CONFIG_DIR/tokens"
     while true; do
         read -p "用户名: " U
@@ -121,7 +121,7 @@ install_frpc() {
 
     read -p "请输入服务端地址 (serverAddr): " SERVER_ADDR
     read -p "请输入用户名 (user): " USERNAME
-    read -p "请输入 token (meta_token): " TOKEN
+    read -p "请输入 token (metadatas.token): " TOKEN
     read -p "请输入代理名称 (name): " PROXY_NAME
     read -p "请输入代理类型 (tcp/udp/http/https)，默认 tcp: " PROXY_TYPE
     PROXY_TYPE=${PROXY_TYPE:-tcp}
