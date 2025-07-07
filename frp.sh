@@ -236,7 +236,7 @@ EOF
 
     create_frp_command
     create_menu_script
-    echo -e "${Green}frps 安装完成，可使用 "frp" 命令管理${Font}"
+    echo -e "${Green}frps 安装完成，可使用 frp 命令管理${Font}"
 }
 
 install_frpc() {
@@ -296,7 +296,7 @@ EOF
 
     create_frp_command
     create_menu_script
-    echo -e "${Green}frpc 安装完成，可使用 "frp" 命令管理${Font}"
+    echo -e "${Green}frpc 安装完成，可使用 frp 命令管理${Font}"
 }
 
 uninstall_frps() {
