@@ -100,7 +100,7 @@ tokens_menu() {
             2)
                 while true; do
                     read -p "用户名: " U
-                    [ -z "$U" ] && break
+                    #[ -z "$U" ] && break
                     read -p "Token: " T
                     echo "${U}=${T}" >> "$CONFIG_DIR/tokens"
                 done
@@ -142,7 +142,7 @@ EOF
 install_frps() {
     if [ -f "$BIN_DIR/frps" ]; then
         echo -e "${Yellow}frps 已安装。${Font}"
-        echo -e "1) 显示配置文件  2) 重新安装"
+        echo -e "1) 显示配置文件  2) 重新安装  0) 返回"
         read -p "请选择: " C
         case "$C" in
             1) cat "$CONFIG_DIR/frps.toml"; return ;;
@@ -242,7 +242,7 @@ EOF
 install_frpc() {
     if [ -f "$BIN_DIR/frpc" ]; then
         echo -e "${Yellow}frpc 已安装。${Font}"
-        echo -e "1) 显示配置文件  2) 重新安装"
+        echo -e "1) 显示配置文件  2) 重新安装  0) 返回"
         read -p "请选择: " C
         case "$C" in
             1) cat "$CONFIG_DIR/frpc.toml"; return ;;
