@@ -164,9 +164,9 @@ install_frps() {
 
         > "$CONFIG_DIR/tokens"
         while true; do
-            read -p "(回车仍可跳过)用户名: " U
+            read -p "用户名: " U
             [ -z "$U" ] && break
-            read -p "(回车仍可跳过)Token: " T
+            read -p "Token: " T
             echo "${U}=${T}" >> "$CONFIG_DIR/tokens"
         done
         auth_enabled=true
