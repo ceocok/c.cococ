@@ -127,11 +127,12 @@ install_frpc() {
 serverAddr = "$SERVER_ADDR"
 serverPort = 7000
 user = "$USERNAME"
-meta_token = "$TOKEN"
+metadatas.token = "$TOKEN"
 
 [[proxies]]
 name = "ssh"
 type = "tcp"
+localIP = "127.0.0.1"
 localPort = 22
 remotePort = 6000
 EOF
