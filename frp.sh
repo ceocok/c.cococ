@@ -122,6 +122,11 @@ install_frpc() {
     read -p "请输入服务端地址 (serverAddr): " SERVER_ADDR
     read -p "请输入用户名 (user): " USERNAME
     read -p "请输入 token (meta_token): " TOKEN
+    read -p "请输入代理名称 (name): " PROXY_NAME
+    read -p "请输入代理类型 (tcp/udp/http/https)，默认 tcp: " PROXY_TYPE
+    PROXY_TYPE=${PROXY_TYPE:-tcp}
+    read -p "请输入本地端口 (localPort): " LOCAL_PORT
+    read -p "请输入远程端口 (remotePort): " REMOTE_PORT
 
     cat > "$CONFIG_DIR/frpc.toml" <<EOF
 serverAddr = "$SERVER_ADDR"
@@ -130,11 +135,11 @@ user = "$USERNAME"
 metadatas.token = "$TOKEN"
 
 [[proxies]]
-name = "ssh"
-type = "tcp"
+name = "$PROXY_NAME"
+type = "$PROXY_TYPE"
 localIP = "127.0.0.1"
-localPort = 22
-remotePort = 6000
+localPort = $LOCAL_PORT
+remotePort = $REMOTE_PORT
 EOF
 
     cat > "$SYSTEMD_DIR/frpc.service" <<EOF
@@ -155,6 +160,10 @@ EOF
     systemctl start frpc.service
 
     echo -e "${Green}frpc 安装并已启动${Font}"
+    echo -e "${Yellow}以下是 frpc.toml 配置内容：${Font}"
+    echo "---------------------------------"
+    cat "$CONFIG_DIR/frpc.toml"
+    echo "---------------------------------"
 }
 
 uninstall_frps() {
