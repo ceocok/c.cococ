@@ -99,8 +99,9 @@ tokens_menu() {
             1) cat "$CONFIG_DIR/tokens" 2>/dev/null || echo "(无 tokens 文件)"; pause ;;
             2)
                 while true; do
-                    read -p "用户名: " U
-                    read -p "Token: " T
+                    read -p "(回车可跳过)用户名: " U
+                    [ -z "$U" ] && break
+                    read -p "(回车可跳过)Token: " T
                     echo "${U}=${T}" >> "$CONFIG_DIR/tokens"
                 done
                 systemctl restart fp-multiuser.service frps.service
@@ -163,9 +164,9 @@ install_frps() {
 
         > "$CONFIG_DIR/tokens"
         while true; do
-            read -p "用户名: " U
-            #[ -z "$U" ] && break
-            read -p "Token: " T
+            read -p "(回车可跳过)用户名: " U
+            [ -z "$U" ] && break
+            read -p "(回车可跳过)Token: " T
             echo "${U}=${T}" >> "$CONFIG_DIR/tokens"
         done
         auth_enabled=true
