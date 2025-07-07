@@ -100,7 +100,6 @@ tokens_menu() {
             2)
                 while true; do
                     read -p "用户名: " U
-                    #[ -z "$U" ] && break
                     read -p "Token: " T
                     echo "${U}=${T}" >> "$CONFIG_DIR/tokens"
                 done
