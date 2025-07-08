@@ -21,6 +21,7 @@ declare -A script_names=(
   ["14"]="安装证书"
   ["15"]="Alpine-vmess"
   ["16"]="更新 box 工具箱"
+  ["17"]="EasyTier组网"
   ["0"]="退出"
 )
 
@@ -41,6 +42,7 @@ declare -A scripts=(
   ["13"]="socks5.sh"
   ["14"]="acme.sh"
   ["15"]="Alpine-vmess.sh"
+  ["16"]="easytier.sh"
 )
 
 # 显示菜单
