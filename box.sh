@@ -42,7 +42,7 @@ declare -A scripts=(
   ["13"]="socks5.sh"
   ["14"]="acme.sh"
   ["15"]="Alpine-vmess.sh"
-  ["16"]="easytier.sh"
+  ["17"]="easytier.sh"
 )
 
 # 显示菜单
