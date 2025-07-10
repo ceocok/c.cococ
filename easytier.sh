@@ -4,9 +4,13 @@
 # EasyTier All-in-One Deployment & Management Script
 #
 # Author: AI Assistant (Revised based on user feedback)
-# Version: 5.7 (Dynamic DHCP/Static IP)
+# Version: 5.8 (Robust Process Guarding)
 #
 # Changelog:
+#   - v5.8: Implemented robust process guarding for all supported OSs.
+#           - Linux (Systemd): Changed Restart policy to 'always'.
+#           - Alpine (OpenRC): Replaced simple backgrounding with 'supervise-daemon' for true supervision.
+#           - macOS (Launchd): Confirmed 'KeepAlive=true' is the best practice.
 #   - v5.7: Added logic to enable DHCP if virtual IP input is left empty.
 #   - v5.6: Fixed "Unload failed" error on macOS during initial setup.
 #           Improved service restart logic and user messages for macOS.
@@ -95,38 +99,96 @@ set_toml_value() {
 
 
 # --- 平台相关的服务管理功能 ---
-create_service_file() { if [[ "$OS_TYPE" == "macos" || "$OS_TYPE" == "alpine" ]]; then touch "$LOG_FILE"; chown root:root "$LOG_FILE" &>/dev/null; chmod 644 "$LOG_FILE"; fi; if [[ "$OS_TYPE" == "linux" ]]; then cat > "${SERVICE_FILE}" << EOL
+
+# [MODIFIED] 这是修改后的核心函数，用于创建具有强大进程守护能力的服务文件
+create_service_file() {
+    if [[ "$OS_TYPE" == "macos" || "$OS_TYPE" == "alpine" ]]; then
+        touch "$LOG_FILE"
+        chown root:root "$LOG_FILE" &>/dev/null
+        chmod 644 "$LOG_FILE"
+    fi
+
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        cat > "${SERVICE_FILE}" << EOL
 [Unit]
 Description=EasyTier Service
 After=network.target
+
 [Service]
 Type=simple
 User=root
 ExecStart=${INSTALL_DIR}/${CORE_BINARY_NAME} -c ${CONFIG_FILE}
-Restart=on-failure
+# 使用 "always" 策略确保进程无论如何退出都会被重启，提供最强的守护
+Restart=always
 RestartSec=5s
+
 [Install]
 WantedBy=multi-user.target
 EOL
-	elif [[ "$OS_TYPE" == "alpine" ]]; then cat > "${SERVICE_FILE}" << EOL
+    elif [[ "$OS_TYPE" == "alpine" ]]; then
+        # 使用 OpenRC 的 supervise-daemon 实现真正的进程守护
+        # supervise-daemon 会监控进程，并在其崩溃或被杀后自动重启
+        cat > "${SERVICE_FILE}" << EOL
 #!/sbin/openrc-run
-description="EasyTier Service"
+description="EasyTier Service with Supervisor"
+
+# 使用 supervise-daemon 作为守护程序，这是 OpenRC 的标准守护方式
+supervisor=supervise-daemon
+
 command="${INSTALL_DIR}/${CORE_BINARY_NAME}"
 command_args="-c ${CONFIG_FILE}"
 command_user="root"
+
+# supervise-daemon 需要一个 pidfile 来管理进程
 pidfile="/var/run/${SERVICE_NAME}.pid"
-command_background=true
+
+# 将日志重定向到文件
 output_log="${LOG_FILE}"
 error_log="${LOG_FILE}"
-depend() { need net; after net; }
+
+# supervise-daemon 默认就会在进程退出时重启它，等同于 systemd 的 Restart=always
+depend() {
+	need net
+	after net
+}
 EOL
-		chmod +x "${SERVICE_FILE}";
-	elif [[ "$OS_TYPE" == "macos" ]]; then cat > "${SERVICE_FILE}" << EOL
+        chmod +x "${SERVICE_FILE}";
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        cat > "${SERVICE_FILE}" << EOL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>${SERVICE_LABEL}</string><key>ProgramArguments</key><array><string>${INSTALL_DIR}/${CORE_BINARY_NAME}</string><string>-c</string><string>${CONFIG_FILE}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${LOG_FILE}</string><key>StandardErrorPath</key><string>${LOG_FILE}</string></dict></plist>
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SERVICE_LABEL}</string>
+   
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/${CORE_BINARY_NAME}</string>
+        <string>-c</string>
+        <string>${CONFIG_FILE}</string>
+    </array>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- KeepAlive 设置为 true 是 macOS 上最强的守护策略 -->
+    <!-- 它会确保进程始终运行，无论因何种原因退出都会被立即重启 -->
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>${LOG_FILE}</string>
+    
+    <key>StandardErrorPath</key>
+    <string>${LOG_FILE}</string>
+</dict>
+</plist>
 EOL
-	fi; echo -e "${GREEN}服务文件创建/更新成功: ${SERVICE_FILE}${NC}"; }
+    fi
+    echo -e "${GREEN}服务文件创建/更新成功: ${SERVICE_FILE}${NC}"
+}
+
 reload_service_daemon() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl daemon-reload; fi; }
 start_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl start "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" start; elif [[ "$OS_TYPE" == "macos" ]]; then launchctl load "${SERVICE_FILE}" &>/dev/null; fi; }
 stop_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl stop "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" stop; elif [[ "$OS_TYPE" == "macos" ]]; then launchctl unload "${SERVICE_FILE}" &>/dev/null; fi; }
@@ -333,3 +395,4 @@ main() {
 # 将 set_toml_value 函数定义移到 main 函数内部，以覆盖全局定义
 # 这是因为后面的逻辑依赖于新的 set_toml_value 行为
 main "$@"
+
