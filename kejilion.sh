@@ -1,5 +1,5 @@
 #!/bin/bash
-sh_v="3.8.6"
+sh_v="4.0.1"
 
 
 gl_hui='\e[37m'
@@ -12,8 +12,8 @@ gl_zi='\033[35m'
 gl_kjlan='\033[96m'
 
 
-canshu="V6"
-permission_granted="true"
+canshu="default"
+permission_granted="false"
 ENABLE_STATS="true"
 
 
@@ -44,7 +44,7 @@ run_command() {
 
 canshu_v6() {
 	if grep -q '^canshu="V6"' /usr/local/bin/k > /dev/null 2>&1; then
-		sed -i 's/^canshu="V6"/canshu="V6"/' ~/kejilion.sh
+		sed -i 's/^canshu="default"/canshu="V6"/' ~/kejilion.sh
 	fi
 }
 
@@ -64,7 +64,6 @@ CheckFirstRun_true() {
 
 
 send_stats() {
-
 	if [ "$ENABLE_STATS" == "false" ]; then
 		return
 	fi
@@ -72,9 +71,14 @@ send_stats() {
 	local country=$(curl -s ipinfo.io/country)
 	local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
 	local cpu_arch=$(uname -m)
-	curl -s -X POST "https://api.kejilion.pro/api/log" \
-		 -H "Content-Type: application/json" \
-		 -d "{\"action\":\"$1\",\"timestamp\":\"$(date -u '+%Y-%m-%d %H:%M:%S')\",\"country\":\"$country\",\"os_info\":\"$os_info\",\"cpu_arch\":\"$cpu_arch\",\"version\":\"$sh_v\"}" &>/dev/null &
+
+	(
+		curl -s -X POST "https://api.kejilion.pro/api/log" \
+			-H "Content-Type: application/json" \
+			-d "{\"action\":\"$1\",\"timestamp\":\"$(date -u '+%Y-%m-%d %H:%M:%S')\",\"country\":\"$country\",\"os_info\":\"$os_info\",\"cpu_arch\":\"$cpu_arch\",\"version\":\"$sh_v\"}" \
+		&>/dev/null
+	) &
+
 }
 
 
@@ -206,7 +210,7 @@ check_disk_space() {
 
 
 install_dependency() {
-	install wget unzip tar jq
+	install wget unzip tar jq grep
 }
 
 remove() {
@@ -1289,6 +1293,8 @@ install_ldnmp_conf() {
   cd /home && mkdir -p web/html web/mysql web/certs web/conf.d web/redis web/log/nginx && touch web/docker-compose.yml
   wget -O /home/web/nginx.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/nginx10.conf
   wget -O /home/web/conf.d/default.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/default10.conf
+  wget -O /home/web/redis/valkey.conf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/valkey.conf
+
 
   default_server_ssl
 
@@ -1313,7 +1319,7 @@ install_ldnmp() {
 
 	  cp /home/web/docker-compose.yml /home/web/docker-compose1.yml
 
-	  if ! grep -q "healthcheck" /home/web/docker-compose.yml; then
+	  if ! grep -q "network_mode" /home/web/docker-compose.yml; then
 		wget -O /home/web/docker-compose.yml ${gh_proxy}raw.githubusercontent.com/kejilion/docker/main/LNMP-docker-compose-10.yml
 	  	dbrootpasswd=$(grep -oP 'MYSQL_ROOT_PASSWORD:\s*\K.*' /home/web/docker-compose1.yml | tr -d '[:space:]')
 	  	dbuse=$(grep -oP 'MYSQL_USER:\s*\K.*' /home/web/docker-compose1.yml | tr -d '[:space:]')
@@ -1322,6 +1328,7 @@ install_ldnmp() {
   		sed -i "s#webroot#$dbrootpasswd#g" /home/web/docker-compose.yml
   		sed -i "s#kejilionYYDS#$dbusepasswd#g" /home/web/docker-compose.yml
   		sed -i "s#kejilion#$dbuse#g" /home/web/docker-compose.yml
+
 	  fi
 
 	  if grep -q "kjlion/nginx:alpine" /home/web/docker-compose1.yml; then
@@ -1333,7 +1340,11 @@ install_ldnmp() {
 	  sleep 1
   	  crontab -l 2>/dev/null | grep -v 'logrotate' | crontab -
   	  (crontab -l 2>/dev/null; echo '0 2 * * * docker exec nginx apk add logrotate && docker exec nginx logrotate -f /etc/logrotate.conf') | crontab -
+
+	  fix_phpfpm_conf php
+	  fix_phpfpm_conf php74
 	  restart_ldnmp
+
 
 	  clear
 	  echo "LDNMP环境安装完毕"
@@ -1378,7 +1389,7 @@ install_ssltls() {
 				docker run -it --rm -p 80:80 -v /etc/letsencrypt/:/etc/letsencrypt certbot/certbot certonly --standalone -d "$yuming" --email your@email.com --agree-tos --no-eff-email --force-renewal --key-type ecdsa
 			fi
 	  fi
-
+	  mkdir -p /home/web/certs/
 	  cp /etc/letsencrypt/live/$yuming/fullchain.pem /home/web/certs/${yuming}_cert.pem > /dev/null 2>&1
 	  cp /etc/letsencrypt/live/$yuming/privkey.pem /home/web/certs/${yuming}_key.pem > /dev/null 2>&1
 
@@ -1405,7 +1416,7 @@ install_ssltls_text() {
 
 
 add_ssl() {
-
+echo -e "${gl_huang}快速申请SSL证书，过期前自动续签${gl_bai}"
 yuming="${1:-}"
 if [ -z "$yuming" ]; then
 	add_yuming
@@ -1519,11 +1530,10 @@ reverse_proxy() {
 
 
 restart_redis() {
+  rm -rf /home/web/redis/*
   docker exec redis redis-cli FLUSHALL > /dev/null 2>&1
-  docker exec -it redis redis-cli CONFIG SET maxmemory 512mb > /dev/null 2>&1
-  docker exec -it redis redis-cli CONFIG SET maxmemory-policy allkeys-lru > /dev/null 2>&1
-  docker exec -it redis redis-cli CONFIG SET save "" > /dev/null 2>&1
-  docker exec -it redis redis-cli CONFIG SET appendonly no > /dev/null 2>&1
+  # docker exec -it redis redis-cli CONFIG SET maxmemory 1gb > /dev/null 2>&1
+  # docker exec -it redis redis-cli CONFIG SET maxmemory-policy allkeys-lru > /dev/null 2>&1
 }
 
 
@@ -1629,14 +1639,13 @@ cf_purge_cache() {
 
 web_cache() {
   send_stats "清理站点缓存"
-  # docker exec -it nginx rm -rf /var/cache/nginx
   cf_purge_cache
   docker exec php php -r 'opcache_reset();'
   docker exec php74 php -r 'opcache_reset();'
   docker exec nginx nginx -s stop
   docker exec nginx rm -rf /var/cache/nginx/*
   docker exec nginx nginx
-  docker restart php php74 redis
+  docker restart redis
   restart_redis
 }
 
@@ -1738,11 +1747,570 @@ fi
 }
 
 
+patch_wp_memory_limit() {
+  local MEMORY_LIMIT="${1:-256M}"      # 第一个参数，默认256M
+  local MAX_MEMORY_LIMIT="${2:-256M}"  # 第二个参数，默认256M
+  local TARGET_DIR="/home/web/html"    # 路径写死
+
+  find "$TARGET_DIR" -type f -name "wp-config.php" | while read -r FILE; do
+	# 删除旧定义
+	sed -i "/define(['\"]WP_MEMORY_LIMIT['\"].*/d" "$FILE"
+	sed -i "/define(['\"]WP_MAX_MEMORY_LIMIT['\"].*/d" "$FILE"
+
+	# 插入新定义，放在含 "Happy publishing" 的行前
+	awk -v insert="define('WP_MEMORY_LIMIT', '$MEMORY_LIMIT');\ndefine('WP_MAX_MEMORY_LIMIT', '$MAX_MEMORY_LIMIT');" \
+	'
+	  /Happy publishing/ {
+		print insert
+	  }
+	  { print }
+	' "$FILE" > "$FILE.tmp" && mv -f "$FILE.tmp" "$FILE"
+
+	echo "[+] Replaced WP_MEMORY_LIMIT in $FILE"
+  done
+}
+
+
+
+
+patch_wp_debug() {
+  local DEBUG="${1:-false}"           # 第一个参数，默认false
+  local DEBUG_DISPLAY="${2:-false}"   # 第二个参数，默认false
+  local DEBUG_LOG="${3:-false}"       # 第三个参数，默认false
+  local TARGET_DIR="/home/web/html"   # 路径写死
+
+  find "$TARGET_DIR" -type f -name "wp-config.php" | while read -r FILE; do
+	# 删除旧定义
+	sed -i "/define(['\"]WP_DEBUG['\"].*/d" "$FILE"
+	sed -i "/define(['\"]WP_DEBUG_DISPLAY['\"].*/d" "$FILE"
+	sed -i "/define(['\"]WP_DEBUG_LOG['\"].*/d" "$FILE"
+
+	# 插入新定义，放在含 "Happy publishing" 的行前
+	awk -v insert="define('WP_DEBUG_DISPLAY', $DEBUG_DISPLAY);\ndefine('WP_DEBUG_LOG', $DEBUG_LOG);" \
+	'
+	  /Happy publishing/ {
+		print insert
+	  }
+	  { print }
+	' "$FILE" > "$FILE.tmp" && mv -f "$FILE.tmp" "$FILE"
+
+	echo "[+] Replaced WP_DEBUG settings in $FILE"
+  done
+}
+
+
+nginx_br() {
+
+	local mode=$1
+
+	if ! grep -q "kjlion/nginx:alpine" /home/web/docker-compose.yml; then
+		wget -O /home/web/nginx.conf "${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/nginx10.conf"
+	fi
+
+	if [ "$mode" == "on" ]; then
+		# 开启 Brotli：去掉注释
+		sed -i 's|# load_module /etc/nginx/modules/ngx_http_brotli_filter_module.so;|load_module /etc/nginx/modules/ngx_http_brotli_filter_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|# load_module /etc/nginx/modules/ngx_http_brotli_static_module.so;|load_module /etc/nginx/modules/ngx_http_brotli_static_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+
+		sed -i 's|^\(\s*\)# brotli on;|\1brotli on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_static on;|\1brotli_static on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_comp_level \(.*\);|\1brotli_comp_level \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_buffers \(.*\);|\1brotli_buffers \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_min_length \(.*\);|\1brotli_min_length \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_window \(.*\);|\1brotli_window \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# brotli_types \(.*\);|\1brotli_types \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i '/brotli_types/,+6 s/^\(\s*\)#\s*/\1/' /home/web/nginx.conf
+
+	elif [ "$mode" == "off" ]; then
+		# 关闭 Brotli：加上注释
+		sed -i 's|^load_module /etc/nginx/modules/ngx_http_brotli_filter_module.so;|# load_module /etc/nginx/modules/ngx_http_brotli_filter_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^load_module /etc/nginx/modules/ngx_http_brotli_static_module.so;|# load_module /etc/nginx/modules/ngx_http_brotli_static_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+
+		sed -i 's|^\(\s*\)brotli on;|\1# brotli on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_static on;|\1# brotli_static on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_comp_level \(.*\);|\1# brotli_comp_level \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_buffers \(.*\);|\1# brotli_buffers \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_min_length \(.*\);|\1# brotli_min_length \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_window \(.*\);|\1# brotli_window \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)brotli_types \(.*\);|\1# brotli_types \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i '/brotli_types/,+6 {
+			/^[[:space:]]*[^#[:space:]]/ s/^\(\s*\)/\1# /
+		}' /home/web/nginx.conf
+
+	else
+		echo "无效的参数：使用 'on' 或 'off'"
+		return 1
+	fi
+
+	# 检查 nginx 镜像并根据情况处理
+	if grep -q "kjlion/nginx:alpine" /home/web/docker-compose.yml; then
+		docker exec nginx nginx -s reload
+	else
+		sed -i 's|nginx:alpine|kjlion/nginx:alpine|g' /home/web/docker-compose.yml
+		nginx_upgrade
+	fi
+
+
+}
+
+
+
+nginx_zstd() {
+
+	local mode=$1
+
+	if ! grep -q "kjlion/nginx:alpine" /home/web/docker-compose.yml; then
+		wget -O /home/web/nginx.conf "${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/nginx10.conf"
+	fi
+
+	if [ "$mode" == "on" ]; then
+		# 开启 Zstd：去掉注释
+		sed -i 's|# load_module /etc/nginx/modules/ngx_http_zstd_filter_module.so;|load_module /etc/nginx/modules/ngx_http_zstd_filter_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|# load_module /etc/nginx/modules/ngx_http_zstd_static_module.so;|load_module /etc/nginx/modules/ngx_http_zstd_static_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+
+		sed -i 's|^\(\s*\)# zstd on;|\1zstd on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# zstd_static on;|\1zstd_static on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# zstd_comp_level \(.*\);|\1zstd_comp_level \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# zstd_buffers \(.*\);|\1zstd_buffers \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# zstd_min_length \(.*\);|\1zstd_min_length \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)# zstd_types \(.*\);|\1zstd_types \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i '/zstd_types/,+6 s/^\(\s*\)#\s*/\1/' /home/web/nginx.conf
+
+
+
+	elif [ "$mode" == "off" ]; then
+		# 关闭 Zstd：加上注释
+		sed -i 's|^load_module /etc/nginx/modules/ngx_http_zstd_filter_module.so;|# load_module /etc/nginx/modules/ngx_http_zstd_filter_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^load_module /etc/nginx/modules/ngx_http_zstd_static_module.so;|# load_module /etc/nginx/modules/ngx_http_zstd_static_module.so;|' /home/web/nginx.conf > /dev/null 2>&1
+
+		sed -i 's|^\(\s*\)zstd on;|\1# zstd on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)zstd_static on;|\1# zstd_static on;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)zstd_comp_level \(.*\);|\1# zstd_comp_level \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)zstd_buffers \(.*\);|\1# zstd_buffers \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)zstd_min_length \(.*\);|\1# zstd_min_length \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i 's|^\(\s*\)zstd_types \(.*\);|\1# zstd_types \2;|' /home/web/nginx.conf > /dev/null 2>&1
+		sed -i '/zstd_types/,+6 {
+			/^[[:space:]]*[^#[:space:]]/ s/^\(\s*\)/\1# /
+		}' /home/web/nginx.conf
+
+
+	else
+		echo "无效的参数：使用 'on' 或 'off'"
+		return 1
+	fi
+
+	# 检查 nginx 镜像并根据情况处理
+	if grep -q "kjlion/nginx:alpine" /home/web/docker-compose.yml; then
+		docker exec nginx nginx -s reload
+	else
+		sed -i 's|nginx:alpine|kjlion/nginx:alpine|g' /home/web/docker-compose.yml
+		nginx_upgrade
+	fi
+
+
+
+}
 
 
 
 
 
+
+
+
+nginx_gzip() {
+
+	local mode=$1
+	if [ "$mode" == "on" ]; then
+		sed -i 's|^\(\s*\)# gzip on;|\1gzip on;|' /home/web/nginx.conf > /dev/null 2>&1
+	elif [ "$mode" == "off" ]; then
+		sed -i 's|^\(\s*\)gzip on;|\1# gzip on;|' /home/web/nginx.conf > /dev/null 2>&1
+	else
+		echo "无效的参数：使用 'on' 或 'off'"
+		return 1
+	fi
+
+	docker exec nginx nginx -s reload
+
+}
+
+
+
+
+
+
+web_security() {
+	  send_stats "LDNMP环境防御"
+	  while true; do
+		check_waf_status
+		check_cf_mode
+		if [ -x "$(command -v fail2ban-client)" ] ; then
+			clear
+			remove fail2ban
+			rm -rf /etc/fail2ban
+		else
+			  clear
+			  docker_name="fail2ban"
+			  check_docker_app
+			  echo -e "服务器网站防御程序 ${check_docker}${gl_lv}${CFmessage}${waf_status}${gl_bai}"
+			  echo "------------------------"
+			  echo "1. 安装防御程序"
+			  echo "------------------------"
+			  echo "5. 查看SSH拦截记录                6. 查看网站拦截记录"
+			  echo "7. 查看防御规则列表               8. 查看日志实时监控"
+			  echo "------------------------"
+			  echo "11. 配置拦截参数                  12. 清除所有拉黑的IP"
+			  echo "------------------------"
+			  echo "21. cloudflare模式                22. 高负载开启5秒盾"
+			  echo "------------------------"
+			  echo "31. 开启WAF                       32. 关闭WAF"
+			  echo "33. 开启DDOS防御                  34. 关闭DDOS防御"
+			  echo "------------------------"
+			  echo "9. 卸载防御程序"
+			  echo "------------------------"
+			  echo "0. 返回上一级选单"
+			  echo "------------------------"
+			  read -e -p "请输入你的选择: " sub_choice
+			  case $sub_choice in
+				  1)
+					  f2b_install_sshd
+					  cd /path/to/fail2ban/config/fail2ban/filter.d
+					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/fail2ban-nginx-cc.conf
+					  cd /path/to/fail2ban/config/fail2ban/jail.d/
+					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/nginx-docker-cc.conf
+					  sed -i "/cloudflare/d" /path/to/fail2ban/config/fail2ban/jail.d/nginx-docker-cc.conf
+					  f2b_status
+					  ;;
+				  5)
+					  echo "------------------------"
+					  f2b_sshd
+					  echo "------------------------"
+					  ;;
+				  6)
+
+					  echo "------------------------"
+					  local xxx="fail2ban-nginx-cc"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-418"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-bad-request"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-badbots"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-botsearch"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-deny"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-http-auth"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-nginx-unauthorized"
+					  f2b_status_xxx
+					  echo "------------------------"
+					  local xxx="docker-php-url-fopen"
+					  f2b_status_xxx
+					  echo "------------------------"
+
+					  ;;
+
+				  7)
+					  docker exec -it fail2ban fail2ban-client status
+					  ;;
+				  8)
+					  tail -f /path/to/fail2ban/config/log/fail2ban/fail2ban.log
+
+					  ;;
+				  9)
+					  docker rm -f fail2ban
+					  rm -rf /path/to/fail2ban
+					  crontab -l | grep -v "CF-Under-Attack.sh" | crontab - 2>/dev/null
+					  echo "Fail2Ban防御程序已卸载"
+					  ;;
+
+				  11)
+					  install nano
+					  nano /path/to/fail2ban/config/fail2ban/jail.d/nginx-docker-cc.conf
+					  f2b_status
+					  break
+					  ;;
+
+				  12)
+					  docker exec -it fail2ban fail2ban-client unban --all
+					  ;;
+
+				  21)
+					  send_stats "cloudflare模式"
+					  echo "到cf后台右上角我的个人资料，选择左侧API令牌，获取Global API Key"
+					  echo "https://dash.cloudflare.com/login"
+					  read -e -p "输入CF的账号: " cfuser
+					  read -e -p "输入CF的Global API Key: " cftoken
+
+					  wget -O /home/web/conf.d/default.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/default11.conf
+					  docker exec nginx nginx -s reload
+
+					  cd /path/to/fail2ban/config/fail2ban/jail.d/
+					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/nginx-docker-cc.conf
+
+					  cd /path/to/fail2ban/config/fail2ban/action.d
+					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/cloudflare-docker.conf
+
+					  sed -i "s/kejilion@outlook.com/$cfuser/g" /path/to/fail2ban/config/fail2ban/action.d/cloudflare-docker.conf
+					  sed -i "s/APIKEY00000/$cftoken/g" /path/to/fail2ban/config/fail2ban/action.d/cloudflare-docker.conf
+					  f2b_status
+
+					  echo "已配置cloudflare模式，可在cf后台，站点-安全性-事件中查看拦截记录"
+					  ;;
+
+				  22)
+					  send_stats "高负载开启5秒盾"
+					  echo -e "${gl_huang}网站每5分钟自动检测，当达检测到高负载会自动开盾，低负载也会自动关闭5秒盾。${gl_bai}"
+					  echo "--------------"
+					  echo "获取CF参数: "
+					  echo -e "到cf后台右上角我的个人资料，选择左侧API令牌，获取${gl_huang}Global API Key${gl_bai}"
+					  echo -e "到cf后台域名概要页面右下方获取${gl_huang}区域ID${gl_bai}"
+					  echo "https://dash.cloudflare.com/login"
+					  echo "--------------"
+					  read -e -p "输入CF的账号: " cfuser
+					  read -e -p "输入CF的Global API Key: " cftoken
+					  read -e -p "输入CF中域名的区域ID: " cfzonID
+
+					  cd ~
+					  install jq bc
+					  check_crontab_installed
+					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/CF-Under-Attack.sh
+					  chmod +x CF-Under-Attack.sh
+					  sed -i "s/AAAA/$cfuser/g" ~/CF-Under-Attack.sh
+					  sed -i "s/BBBB/$cftoken/g" ~/CF-Under-Attack.sh
+					  sed -i "s/CCCC/$cfzonID/g" ~/CF-Under-Attack.sh
+
+					  local cron_job="*/5 * * * * ~/CF-Under-Attack.sh"
+
+					  local existing_cron=$(crontab -l 2>/dev/null | grep -F "$cron_job")
+
+					  if [ -z "$existing_cron" ]; then
+						  (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
+						  echo "高负载自动开盾脚本已添加"
+					  else
+						  echo "自动开盾脚本已存在，无需添加"
+					  fi
+
+					  ;;
+
+				  31)
+					  nginx_waf on
+					  echo "站点WAF已开启"
+					  send_stats "站点WAF已开启"
+					  ;;
+
+				  32)
+				  	  nginx_waf off
+					  echo "站点WAF已关闭"
+					  send_stats "站点WAF已关闭"
+					  ;;
+
+				  33)
+					  enable_ddos_defense
+					  ;;
+
+				  34)
+					  disable_ddos_defense
+					  ;;
+
+				  *)
+					  break
+					  ;;
+			  esac
+		fi
+	  break_end
+	  done
+}
+
+
+
+check_nginx_mode() {
+
+CONFIG_FILE="/home/web/nginx.conf"
+
+# 获取当前的 worker_processes 设置值
+current_value=$(grep -E '^\s*worker_processes\s+[0-9]+;' "$CONFIG_FILE" | awk '{print $2}' | tr -d ';')
+
+# 根据值设置模式信息
+if [ "$current_value" = "8" ]; then
+	mode_info=" 高性能模式"
+else
+	mode_info=" 标准模式"
+fi
+
+
+
+}
+
+
+check_nginx_compression() {
+
+	CONFIG_FILE="/home/web/nginx.conf"
+
+	# 检查 zstd 是否开启且未被注释（整行以 zstd on; 开头）
+	if grep -qE '^\s*zstd\s+on;' "$CONFIG_FILE"; then
+		zstd_status=" zstd压缩已开启"
+	else
+		zstd_status=""
+	fi
+
+	# 检查 brotli 是否开启且未被注释
+	if grep -qE '^\s*brotli\s+on;' "$CONFIG_FILE"; then
+		br_status=" br压缩已开启"
+	else
+		br_status=""
+	fi
+
+	# 检查 gzip 是否开启且未被注释
+	if grep -qE '^\s*gzip\s+on;' "$CONFIG_FILE"; then
+		gzip_status=" gzip压缩已开启"
+	else
+		gzip_status=""
+	fi
+}
+
+
+
+
+web_optimization() {
+		  while true; do
+		  	  check_nginx_mode
+			  check_nginx_compression
+			  clear
+			  send_stats "优化LDNMP环境"
+			  echo -e "优化LDNMP环境${gl_lv}${mode_info}${gzip_status}${br_status}${zstd_status}${gl_bai}"
+			  echo "------------------------"
+			  echo "1. 标准模式              2. 高性能模式 (推荐2H4G以上)"
+			  echo "------------------------"
+			  echo "3. 开启gzip压缩          4. 关闭gzip压缩"
+			  echo "5. 开启br压缩            6. 关闭br压缩"
+			  echo "7. 开启zstd压缩          8. 关闭zstd压缩"
+			  echo "------------------------"
+			  echo "0. 返回上一级选单"
+			  echo "------------------------"
+			  read -e -p "请输入你的选择: " sub_choice
+			  case $sub_choice in
+				  1)
+				  send_stats "站点标准模式"
+
+				  # nginx调优
+				  sed -i 's/worker_connections.*/worker_connections 10240;/' /home/web/nginx.conf
+				  sed -i 's/worker_processes.*/worker_processes 4;/' /home/web/nginx.conf
+
+				  # php调优
+				  wget -O /home/optimized_php.ini ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/optimized_php.ini
+				  docker cp /home/optimized_php.ini php:/usr/local/etc/php/conf.d/optimized_php.ini
+				  docker cp /home/optimized_php.ini php74:/usr/local/etc/php/conf.d/optimized_php.ini
+				  rm -rf /home/optimized_php.ini
+
+				  # php调优
+				  wget -O /home/www.conf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/www-1.conf
+				  docker cp /home/www.conf php:/usr/local/etc/php-fpm.d/www.conf
+				  docker cp /home/www.conf php74:/usr/local/etc/php-fpm.d/www.conf
+				  rm -rf /home/www.conf
+
+				  patch_wp_memory_limit
+				  patch_wp_debug
+
+				  fix_phpfpm_conf php
+				  fix_phpfpm_conf php74
+
+				  # mysql调优
+				  wget -O /home/custom_mysql_config.cnf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/custom_mysql_config-1.cnf
+				  docker cp /home/custom_mysql_config.cnf mysql:/etc/mysql/conf.d/
+				  rm -rf /home/custom_mysql_config.cnf
+
+
+				  cd /home/web && docker compose restart
+
+				  restart_redis
+				  optimize_balanced
+
+
+				  echo "LDNMP环境已设置成 标准模式"
+
+					  ;;
+				  2)
+				  send_stats "站点高性能模式"
+
+				  # nginx调优
+				  sed -i 's/worker_connections.*/worker_connections 20480;/' /home/web/nginx.conf
+				  sed -i 's/worker_processes.*/worker_processes 8;/' /home/web/nginx.conf
+
+				  # php调优
+				  wget -O /home/optimized_php.ini ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/optimized_php.ini
+				  docker cp /home/optimized_php.ini php:/usr/local/etc/php/conf.d/optimized_php.ini
+				  docker cp /home/optimized_php.ini php74:/usr/local/etc/php/conf.d/optimized_php.ini
+				  rm -rf /home/optimized_php.ini
+
+				  # php调优
+				  wget -O /home/www.conf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/www.conf
+				  docker cp /home/www.conf php:/usr/local/etc/php-fpm.d/www.conf
+				  docker cp /home/www.conf php74:/usr/local/etc/php-fpm.d/www.conf
+				  rm -rf /home/www.conf
+
+				  patch_wp_memory_limit 512M 512M
+				  patch_wp_debug
+
+				  fix_phpfpm_conf php
+				  fix_phpfpm_conf php74
+
+				  # mysql调优
+				  wget -O /home/custom_mysql_config.cnf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/custom_mysql_config.cnf
+				  docker cp /home/custom_mysql_config.cnf mysql:/etc/mysql/conf.d/
+				  rm -rf /home/custom_mysql_config.cnf
+
+				  cd /home/web && docker compose restart
+
+				  restart_redis
+				  optimize_web_server
+
+				  echo "LDNMP环境已设置成 高性能模式"
+
+					  ;;
+				  3)
+				  send_stats "nginx_gzip on"
+				  nginx_gzip on
+					  ;;
+				  4)
+				  send_stats "nginx_gzip off"
+				  nginx_gzip off
+					  ;;
+				  5)
+				  send_stats "nginx_br on"
+				  nginx_br on
+					  ;;
+				  6)
+				  send_stats "nginx_br off"
+				  nginx_br off
+					  ;;
+				  7)
+				  send_stats "nginx_zstd on"
+				  nginx_zstd on
+					  ;;
+				  8)
+				  send_stats "nginx_zstd off"
+				  nginx_zstd off
+					  ;;
+				  *)
+					  break
+					  ;;
+			  esac
+			  break_end
+
+		  done
+
+
+}
 
 
 
@@ -1772,22 +2340,24 @@ echo "------------------------"
 echo "访问地址:"
 ip_address
 if [ -n "$ipv4_address" ]; then
-	echo "http://$ipv4_address:$docker_port"
+	echo "http://$ipv4_address:${docker_port}"
 fi
 
 if [ -n "$ipv6_address" ]; then
-	echo "http://[$ipv6_address]:$docker_port"
+	echo "http://[$ipv6_address]:${docker_port}"
 fi
 
-local search_pattern="$ipv4_address:$docker_port"
+local search_pattern1="$ipv4_address:${docker_port}"
+local search_pattern2="127.0.0.1:${docker_port}"
 
 for file in /home/web/conf.d/*; do
 	if [ -f "$file" ]; then
-		if grep -q "$search_pattern" "$file" 2>/dev/null; then
+		if grep -q "$search_pattern1" "$file" 2>/dev/null || grep -q "$search_pattern2" "$file" 2>/dev/null; then
 			echo "https://$(basename "$file" | sed 's/\.conf$//')"
 		fi
 	fi
 done
+
 
 }
 
@@ -2075,6 +2645,18 @@ clear_host_port_rules() {
 
 
 
+setup_docker_dir() {
+
+	mkdir -p /home/docker/ 2>/dev/null
+	if [ -d "/vol1/1000/" ] && [ ! -d "/vol1/1000/docker" ]; then
+		cp -f /home/docker /home/docker1 2>/dev/null
+		rm -rf /home/docker 2>/dev/null
+		mkdir -p /vol1/1000/docker 2>/dev/null
+		ln -s /vol1/1000/docker /home/docker 2>/dev/null
+	fi
+}
+
+
 
 
 docker_app() {
@@ -2088,6 +2670,12 @@ while true; do
 	echo "$docker_describe"
 	echo "$docker_url"
 	if docker inspect "$docker_name" &>/dev/null; then
+		if [ ! -f "/home/docker/${docker_name}_port.conf" ]; then
+			local docker_port=$(docker port "$docker_name" | head -n1 | awk -F'[:]' '/->/ {print $NF; exit}')
+			docker_port=${docker_port:-0000}
+			echo "$docker_port" > "/home/docker/${docker_name}_port.conf"
+		fi
+		local docker_port=$(cat "/home/docker/${docker_name}_port.conf")
 		check_docker_app_ip
 	fi
 	echo ""
@@ -2103,9 +2691,16 @@ while true; do
 	 case $choice in
 		1)
 			check_disk_space $app_size
+			read -e -p "输入应用对外服务端口，回车默认使用${docker_port}端口: " app_port
+			local app_port=${app_port:-${docker_port}}
+			local docker_port=$app_port
+
 			install jq
 			install_docker
-			$docker_rum
+			docker_rum
+			setup_docker_dir
+			echo "$docker_port" > "/home/docker/${docker_name}_port.conf"
+
 			clear
 			echo "$docker_name 已经安装完成"
 			check_docker_app_ip
@@ -2117,7 +2712,7 @@ while true; do
 		2)
 			docker rm -f "$docker_name"
 			docker rmi -f "$docker_img"
-			$docker_rum
+			docker_rum
 			clear
 			echo "$docker_name 已经安装完成"
 			check_docker_app_ip
@@ -2130,6 +2725,7 @@ while true; do
 			docker rm -f "$docker_name"
 			docker rmi -f "$docker_img"
 			rm -rf "/home/docker/$docker_name"
+			rm -f /home/docker/${docker_name}_port.conf
 			echo "应用已卸载"
 			send_stats "卸载$docker_name"
 			;;
@@ -2138,7 +2734,7 @@ while true; do
 			echo "${docker_name}域名访问设置"
 			send_stats "${docker_name}域名访问设置"
 			add_yuming
-			ldnmp_Proxy ${yuming} ${ipv4_address} ${docker_port}
+			ldnmp_Proxy ${yuming} 127.0.0.1 ${docker_port}
 			block_container_port "$docker_name" "$ipv4_address"
 			;;
 
@@ -2181,6 +2777,12 @@ docker_app_plus() {
 		echo "$app_text"
 		echo "$app_url"
 		if docker inspect "$docker_name" &>/dev/null; then
+			if [ ! -f "/home/docker/${docker_name}_port.conf" ]; then
+				local docker_port=$(docker port "$docker_name" | head -n1 | awk -F'[:]' '/->/ {print $NF; exit}')
+				docker_port=${docker_port:-0000}
+				echo "$docker_port" > "/home/docker/${docker_name}_port.conf"
+			fi
+			local docker_port=$(cat "/home/docker/${docker_name}_port.conf")
 			check_docker_app_ip
 		fi
 		echo ""
@@ -2196,21 +2798,27 @@ docker_app_plus() {
 		case $choice in
 			1)
 				check_disk_space $app_size
+				read -e -p "输入应用对外服务端口，回车默认使用${docker_port}端口: " app_port
+				local app_port=${app_port:-${docker_port}}
+				local docker_port=$app_port
 				install jq
 				install_docker
 				docker_app_install
+				setup_docker_dir
+				echo "$docker_port" > "/home/docker/${docker_name}_port.conf"
 				;;
 			2)
 				docker_app_update
 				;;
 			3)
 				docker_app_uninstall
+				rm -f /home/docker/${docker_name}_port.conf
 				;;
 			5)
 				echo "${docker_name}域名访问设置"
 				send_stats "${docker_name}域名访问设置"
 				add_yuming
-				ldnmp_Proxy ${yuming} ${ipv4_address} ${docker_port}
+				ldnmp_Proxy ${yuming} 127.0.0.1 ${docker_port}
 				block_container_port "$docker_name" "$ipv4_address"
 				;;
 			6)
@@ -2277,7 +2885,7 @@ docker run -d \
 # Run Grafana container
 docker run -d \
   --name grafana \
-  -p 8047:3000 \
+  -p ${docker_port}:3000 \
   -v $GRAFANA_DIR:/var/lib/grafana \
   --network $NETWORK_NAME \
   --restart unless-stopped \
@@ -2368,23 +2976,21 @@ f2b_install_sshd() {
 		systemctl enable rsyslog
 		cd /path/to/fail2ban/config/fail2ban/jail.d/
 		curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/linux-ssh.conf
+		systemctl restart rsyslog
 	fi
+
+	rm -f /path/to/fail2ban/config/fail2ban/jail.d/sshd.conf
 }
 
 f2b_sshd() {
 	if grep -q 'Alpine' /etc/issue; then
 		xxx=alpine-sshd
 		f2b_status_xxx
-	elif command -v dnf &>/dev/null; then
-		xxx=centos-sshd
-		f2b_status_xxx
 	else
-		xxx=linux-sshd
+		xxx=sshd
 		f2b_status_xxx
 	fi
 }
-
-
 
 
 
@@ -2405,9 +3011,12 @@ server_reboot() {
 
 }
 
+
+
+
+
 output_status() {
 	output=$(awk 'BEGIN { rx_total = 0; tx_total = 0 }
-		# 匹配常见的公网网卡命名: eth*, ens*, enp*, eno*
 		$1 ~ /^(eth|ens|enp|eno)[0-9]+/ {
 			rx_total += $2
 			tx_total += $10
@@ -2423,10 +3032,14 @@ output_status() {
 			if (tx_total > 1024) { tx_total /= 1024; tx_units = "M"; }
 			if (tx_total > 1024) { tx_total /= 1024; tx_units = "G"; }
 
-			printf("总接收:       %.2f%s\n总发送:       %.2f%s\n", rx_total, rx_units, tx_total, tx_units);
+			printf("%.2f%s %.2f%s\n", rx_total, rx_units, tx_total, tx_units);
 		}' /proc/net/dev)
-	# echo "$output"
+
+	rx=$(echo "$output" | awk '{print $1}')
+	tx=$(echo "$output" | awk '{print $2}')
+
 }
+
 
 
 
@@ -2540,6 +3153,7 @@ ldnmp_wp() {
   install_ssltls
   certs_status
   add_db
+  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
   wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/wordpress.com.conf
   sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
   nginx_http_on
@@ -2592,6 +3206,7 @@ ldnmp_Proxy() {
 	nginx_install_status
 	install_ssltls
 	certs_status
+	wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/reverse-proxy.conf
 	sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	sed -i "s/0.0.0.0/$reverseproxy/g" /home/web/conf.d/$yuming.conf
@@ -2600,6 +3215,52 @@ ldnmp_Proxy() {
 	docker exec nginx nginx -s reload
 	nginx_web_on
 }
+
+
+
+ldnmp_Proxy_backend() {
+	clear
+	webname="反向代理-负载均衡"
+	yuming="${1:-}"
+	reverseproxy_port="${2:-}"
+
+	send_stats "安装$webname"
+	echo "开始部署 $webname"
+	if [ -z "$yuming" ]; then
+		add_yuming
+	fi
+
+	# 获取用户输入的多个IP:端口（用空格分隔）
+	if [ -z "$reverseproxy_port" ]; then
+		read -e -p "请输入你的多个反代IP+端口用空格隔开（例如 127.0.0.1:3000 127.0.0.1:3002）： " reverseproxy_port
+	fi
+
+	nginx_install_status
+	install_ssltls
+	certs_status
+	wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
+	wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/reverse-proxy-backend.conf
+
+	backend=$(tr -dc 'A-Za-z' < /dev/urandom | head -c 8)
+	sed -i "s/backend_yuming_com/backend_$backend/g" /home/web/conf.d/"$yuming".conf
+
+
+	sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
+
+	# 动态生成 upstream 配置
+	upstream_servers=""
+	for server in $reverseproxy_port; do
+		upstream_servers="$upstream_servers    server $server;\n"
+	done
+
+	# 替换模板中的占位符
+	sed -i "s/# 动态添加/$upstream_servers/g" /home/web/conf.d/$yuming.conf
+
+	nginx_http_on
+	docker exec nginx nginx -s reload
+	nginx_web_on
+}
+
 
 
 
@@ -2768,8 +3429,8 @@ ldnmp_web_status() {
 				;;
 
 			20)
-				echo "域名格式 example.com 不带https://"
 				web_del
+				docker run -it --rm -v /etc/letsencrypt/:/etc/letsencrypt certbot/certbot delete --cert-name "$yuming" -n 2>/dev/null
 
 				;;
 			*)
@@ -2849,35 +3510,19 @@ fi
 
 
 donlond_frp() {
-	mkdir -p /home/frp/ && cd /home/frp/
-	rm -rf /home/frp/frp_0.61.0_linux_amd64
+  role="$1"
+  config_file="/home/frp/${role}.toml"
 
-	arch=$(uname -m)
-	frp_v=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep -oP '"tag_name": "v\K.*?(?=")')
-
-	if [[ "$arch" == "x86_64" ]]; then
-		curl -L ${gh_proxy}github.com/fatedier/frp/releases/download/v${frp_v}/frp_${frp_v}_linux_amd64.tar.gz -o frp_${frp_v}_linux_amd64.tar.gz
-	elif [[ "$arch" == "armv7l" || "$arch" == "aarch64" ]]; then
-		curl -L ${gh_proxy}github.com/fatedier/frp/releases/download/v${frp_v}/frp_${frp_v}_linux_arm.tar.gz -o frp_${frp_v}_linux_amd64.tar.gz
-	else
-		echo "不支持当前CPU架构: $arch"
-	fi
-
-	# 找到最新下载的 frp 文件
-	latest_file=$(ls -t /home/frp/frp_*.tar.gz | head -n 1)
-
-	# 解压该文件
-	tar -zxvf "$latest_file"
-
-	# 获取解压后文件夹的名字
-	dir_name=$(tar -tzf "$latest_file" | head -n 1 | cut -f 1 -d '/')
-
-	# 重命名解压后的文件夹为统一的版本名
-	mv "$dir_name" "frp_0.61.0_linux_amd64"
-
-
+  docker run -d \
+	--name "$role" \
+	--restart=always \
+	--network host \
+	-v "$config_file":"/frp/${role}.toml" \
+	kjlion/frp:alpine \
+	"/frp/${role}" -c "/frp/${role}.toml"
 
 }
+
 
 
 
@@ -2891,10 +3536,9 @@ generate_frps_config() {
 	local dashboard_user="user_$(openssl rand -hex 4)"
 	local dashboard_pwd=$(openssl rand -hex 8)
 
-	donlond_frp
-
-	# 创建 frps.toml 文件
-	cat <<EOF > /home/frp/frp_0.61.0_linux_amd64/frps.toml
+	mkdir -p /home/frp
+	touch /home/frp/frps.toml
+	cat <<EOF > /home/frp/frps.toml
 [common]
 bind_port = $bind_port
 authentication_method = token
@@ -2903,6 +3547,8 @@ dashboard_port = $dashboard_port
 dashboard_user = $dashboard_user
 dashboard_pwd = $dashboard_pwd
 EOF
+
+	donlond_frp frps
 
 	# 输出生成的信息
 	ip_address
@@ -2916,13 +3562,6 @@ EOF
 	echo "FRP面板用户名: $dashboard_user"
 	echo "FRP面板密码: $dashboard_pwd"
 	echo
-	echo "------------------------"
-	install tmux
-	tmux kill-session -t frps >/dev/null 2>&1
-	tmux new -d -s "frps" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frps -c frps.toml"
-	check_crontab_installed
-	crontab -l | grep -v 'frps' | crontab - > /dev/null 2>&1
-	(crontab -l ; echo '@reboot tmux new -d -s "frps" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frps -c frps.toml"') | crontab - > /dev/null 2>&1
 
 	open_port 8055 8056
 
@@ -2936,9 +3575,9 @@ configure_frpc() {
 	read -e -p "请输入外网对接token: " token
 	echo
 
-	donlond_frp
-
-	cat <<EOF > /home/frp/frp_0.61.0_linux_amd64/frpc.toml
+	mkdir -p /home/frp
+	touch /home/frp/frpc.toml
+	cat <<EOF > /home/frp/frpc.toml
 [common]
 server_addr = ${server_addr}
 server_port = 8055
@@ -2946,12 +3585,7 @@ token = ${token}
 
 EOF
 
-	install tmux
-	tmux kill-session -t frpc >/dev/null 2>&1
-	tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"
-	check_crontab_installed
-	crontab -l | grep -v 'frpc' | crontab - > /dev/null 2>&1
-	(crontab -l ; echo '@reboot tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"') | crontab - > /dev/null 2>&1
+	donlond_frp frpc
 
 	open_port 8055
 
@@ -2969,7 +3603,7 @@ add_forwarding_service() {
 	read -e -p "请输入外网端口: " remote_port
 
 	# 将用户输入写入配置文件
-	cat <<EOF >> /home/frp/frp_0.61.0_linux_amd64/frpc.toml
+	cat <<EOF >> /home/frp/frpc.toml
 [$service_name]
 type = ${service_type}
 local_ip = ${local_ip}
@@ -2981,8 +3615,7 @@ EOF
 	# 输出生成的信息
 	echo "服务 $service_name 已成功添加到 frpc.toml"
 
-	tmux kill-session -t frpc >/dev/null 2>&1
-	tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"
+	docker restart frpc
 
 	open_port $local_port
 
@@ -2995,11 +3628,10 @@ delete_forwarding_service() {
 	# 提示用户输入需要删除的服务名称
 	read -e -p "请输入需要删除的服务名称: " service_name
 	# 使用 sed 删除该服务及其相关配置
-	sed -i "/\[$service_name\]/,/^$/d" /home/frp/frp_0.61.0_linux_amd64/frpc.toml
+	sed -i "/\[$service_name\]/,/^$/d" /home/frp/frpc.toml
 	echo "服务 $service_name 已成功从 frpc.toml 删除"
 
-	tmux kill-session -t frpc >/dev/null 2>&1
-	tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"
+	docker restart frpc
 
 }
 
@@ -3125,10 +3757,11 @@ generate_access_urls() {
 		# 处理 HTTPS 配置
 		for port in "${ports[@]}"; do
 			if [[ $port != "8055" && $port != "8056" ]]; then
-				frps_search_pattern="${ipv4_address}:${port}"
+				local frps_search_pattern="${ipv4_address}:${port}"
+				local frps_search_pattern2="127.0.0.1:${port}"
 				for file in /home/web/conf.d/*.conf; do
 					if [ -f "$file" ]; then
-						if grep -q "$frps_search_pattern" "$file" 2>/dev/null; then
+						if grep -q "$frps_search_pattern" "$file" 2>/dev/null || grep -q "$frps_search_pattern2" "$file" 2>/dev/null; then
 							echo "https://$(basename "$file" .conf)"
 						fi
 					fi
@@ -3149,11 +3782,13 @@ frps_main_ports() {
 
 frps_panel() {
 	send_stats "FRP服务端"
+	local docker_name="frps"
 	local docker_port=8056
 	while true; do
 		clear
 		check_frp_app
-		echo -e "FRP服务端 $check_frp"
+		check_docker_image_update $docker_name
+		echo -e "FRP服务端 $check_frp $update_status"
 		echo "构建FRP内网穿透服务环境，将无公网IP的设备暴露到互联网"
 		echo "官网介绍: https://github.com/fatedier/frp/"
 		echo "视频教学: https://www.bilibili.com/video/BV1yMw6e2EwL?t=124.0"
@@ -3174,25 +3809,25 @@ frps_panel() {
 		read -e -p "输入你的选择: " choice
 		case $choice in
 			1)
+				install jq grep ss
+				install_docker
 				generate_frps_config
-				rm -rf /home/frp/*.tar.gz
 				echo "FRP服务端已经安装完成"
 				;;
 			2)
-				cp -f /home/frp/frp_0.61.0_linux_amd64/frps.toml /home/frp/frps.toml
-				donlond_frp
-				cp -f /home/frp/frps.toml /home/frp/frp_0.61.0_linux_amd64/frps.toml
-				tmux kill-session -t frps >/dev/null 2>&1
-				tmux new -d -s "frps" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frps -c frps.toml"
 				crontab -l | grep -v 'frps' | crontab - > /dev/null 2>&1
-				(crontab -l ; echo '@reboot tmux new -d -s "frps" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frps -c frps.toml"') | crontab - > /dev/null 2>&1
-				rm -rf /home/frp/*.tar.gz
+				tmux kill-session -t frps >/dev/null 2>&1
+				docker rm -f frps && docker rmi kjlion/frp:alpine >/dev/null 2>&1
+				[ -f /home/frp/frps.toml ] || cp /home/frp/frp_0.61.0_linux_amd64/frps.toml /home/frp/frps.toml
+				donlond_frp frps
 				echo "FRP服务端已经更新完成"
 				;;
 			3)
 				crontab -l | grep -v 'frps' | crontab - > /dev/null 2>&1
 				tmux kill-session -t frps >/dev/null 2>&1
+				docker rm -f frps && docker rmi kjlion/frp:alpine
 				rm -rf /home/frp
+
 				close_port 8055 8056
 
 				echo "应用已卸载"
@@ -3202,7 +3837,7 @@ frps_panel() {
 				send_stats "FRP对外域名访问"
 				add_yuming
 				read -e -p "请输入你的内网穿透服务端口: " frps_port
-				ldnmp_Proxy ${yuming} ${ipv4_address} ${frps_port}
+				ldnmp_Proxy ${yuming} 127.0.0.1 ${frps_port}
 				block_host_port "$frps_port" "$ipv4_address"
 				;;
 			6)
@@ -3239,17 +3874,20 @@ frps_panel() {
 
 frpc_panel() {
 	send_stats "FRP客户端"
+	local docker_name="frpc"
 	local docker_port=8055
 	while true; do
 		clear
 		check_frp_app
-		echo -e "FRP客户端 $check_frp"
+		check_docker_image_update $docker_name
+		echo -e "FRP客户端 $check_frp $update_status"
 		echo "与服务端对接，对接后可创建内网穿透服务到互联网访问"
 		echo "官网介绍: https://github.com/fatedier/frp/"
 		echo "视频教学: https://www.bilibili.com/video/BV1yMw6e2EwL?t=173.9"
 		echo "------------------------"
 		if [ -d "/home/frp/" ]; then
-			list_forwarding_services "/home/frp/frp_0.61.0_linux_amd64/frpc.toml"
+			[ -f /home/frp/frpc.toml ] || cp /home/frp/frp_0.61.0_linux_amd64/frpc.toml /home/frp/frpc.toml
+			list_forwarding_services "/home/frp/frpc.toml"
 		fi
 		echo ""
 		echo "------------------------"
@@ -3262,25 +3900,24 @@ frpc_panel() {
 		read -e -p "输入你的选择: " choice
 		case $choice in
 			1)
+				install jq grep ss
+				install_docker
 				configure_frpc
-				rm -rf /home/frp/*.tar.gz
 				echo "FRP客户端已经安装完成"
 				;;
 			2)
-				cp -f /home/frp/frp_0.61.0_linux_amd64/frpc.toml /home/frp/frpc.toml
-				donlond_frp
-				cp -f /home/frp/frpc.toml /home/frp/frp_0.61.0_linux_amd64/frpc.toml
-				tmux kill-session -t frpc >/dev/null 2>&1
-				tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"
 				crontab -l | grep -v 'frpc' | crontab - > /dev/null 2>&1
-				(crontab -l ; echo '@reboot tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"') | crontab - > /dev/null 2>&1
-				rm -rf /home/frp/*.tar.gz
+				tmux kill-session -t frpc >/dev/null 2>&1
+				docker rm -f frpc && docker rmi kjlion/frp:alpine >/dev/null 2>&1
+				[ -f /home/frp/frpc.toml ] || cp /home/frp/frp_0.61.0_linux_amd64/frpc.toml /home/frp/frpc.toml
+				donlond_frp frpc
 				echo "FRP客户端已经更新完成"
 				;;
 
 			3)
 				crontab -l | grep -v 'frpc' | crontab - > /dev/null 2>&1
 				tmux kill-session -t frpc >/dev/null 2>&1
+				docker rm -f frpc && docker rmi kjlion/frp:alpine
 				rm -rf /home/frp
 				close_port 8055
 				echo "应用已卸载"
@@ -3296,9 +3933,8 @@ frpc_panel() {
 
 			6)
 				install nano
-				nano /home/frp/frp_0.61.0_linux_amd64/frpc.toml
-				tmux kill-session -t frpc >/dev/null 2>&1
-				tmux new -d -s "frpc" "cd /home/frp/frp_0.61.0_linux_amd64 && ./frpc -c frpc.toml"
+				nano /home/frp/frpc.toml
+				docker restart frpc
 				;;
 
 			*)
@@ -3308,6 +3944,123 @@ frpc_panel() {
 		break_end
 	done
 }
+
+
+
+
+yt_menu_pro() {
+
+	local VIDEO_DIR="/home/yt-dlp"
+	local URL_FILE="$VIDEO_DIR/urls.txt"
+	local ARCHIVE_FILE="$VIDEO_DIR/archive.txt"
+
+	mkdir -p "$VIDEO_DIR"
+
+	while true; do
+
+		if [ -x "/usr/local/bin/yt-dlp" ]; then
+		   local YTDLP_STATUS="${gl_lv}已安装${gl_bai}"
+		else
+		   local YTDLP_STATUS="${gl_hui}未安装${gl_bai}"
+		fi
+
+		clear
+		send_stats "yt-dlp 下载工具"
+		echo -e "yt-dlp $YTDLP_STATUS"
+		echo -e "yt-dlp 是一个功能强大的视频下载工具，支持 YouTube、Bilibili、Twitter 等数千站点。"
+		echo -e "官网地址：https://github.com/yt-dlp/yt-dlp"
+		echo "-------------------------"
+		echo "已下载视频列表:"
+		ls -td "$VIDEO_DIR"/*/ 2>/dev/null || echo "（暂无）"
+		echo "-------------------------"
+		echo "1.  安装               2.  更新               3.  卸载"
+		echo "-------------------------"
+		echo "5.  单个视频下载       6.  批量视频下载       7.  自定义参数下载"
+		echo "8.  下载为MP3音频      9.  删除视频目录       10. Cookie管理（开发中）"
+		echo "-------------------------"
+		echo "0. 返回上一级选单"
+		echo "-------------------------"
+		read -e -p "请输入选项编号: " choice
+
+		case $choice in
+			1)
+				send_stats "正在安装 yt-dlp..."
+				echo "正在安装 yt-dlp..."
+				install ffmpeg
+				sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+				sudo chmod a+rx /usr/local/bin/yt-dlp
+				echo "安装完成。按任意键继续..."
+				read ;;
+			2)
+				send_stats "正在更新 yt-dlp..."
+				echo "正在更新 yt-dlp..."
+				sudo yt-dlp -U
+				echo "更新完成。按任意键继续..."
+				read ;;
+			3)
+				send_stats "正在卸载 yt-dlp..."
+				echo "正在卸载 yt-dlp..."
+				sudo rm -f /usr/local/bin/yt-dlp
+				echo "卸载完成。按任意键继续..."
+				read ;;
+			5)
+				send_stats "单个视频下载"
+				read -e -p "请输入视频链接: " url
+				yt-dlp -P "$VIDEO_DIR" -f "bv*+ba/b" --merge-output-format mp4 \
+					--write-subs --sub-langs all \
+					--write-thumbnail --embed-thumbnail \
+					--write-info-json \
+					-o "$VIDEO_DIR/%(title)s/%(title)s.%(ext)s" \
+					--no-overwrites --no-post-overwrites "$url"
+				read -e -p "下载完成，按任意键继续..." ;;
+			6)
+				send_stats "批量视频下载"
+				install nano
+				if [ ! -f "$URL_FILE" ]; then
+				  echo -e "# 输入多个视频链接地址\n# https://www.bilibili.com/bangumi/play/ep733316?spm_id_from=333.337.0.0&from_spmid=666.25.episode.0" > "$URL_FILE"
+				fi
+				nano $URL_FILE
+				echo "现在开始批量下载..."
+				yt-dlp -P "$VIDEO_DIR" -f "bv*+ba/b" --merge-output-format mp4 \
+					--write-subs --sub-langs all \
+					--write-thumbnail --embed-thumbnail \
+					--write-info-json \
+					-a "$URL_FILE" \
+					-o "$VIDEO_DIR/%(title)s/%(title)s.%(ext)s" \
+					--no-overwrites --no-post-overwrites
+				read -e -p "批量下载完成，按任意键继续..." ;;
+			7)
+				send_stats "自定义视频下载"
+				read -e -p "请输入完整 yt-dlp 参数（不含 yt-dlp）: " custom
+				yt-dlp -P "$VIDEO_DIR" $custom \
+					--write-subs --sub-langs all \
+					--write-thumbnail --embed-thumbnail \
+					--write-info-json \
+					-o "$VIDEO_DIR/%(title)s/%(title)s.%(ext)s" \
+					--no-overwrites --no-post-overwrites
+				read -e -p "执行完成，按任意键继续..." ;;
+			8)
+				send_stats "MP3下载"
+				read -e -p "请输入视频链接: " url
+				yt-dlp -P "$VIDEO_DIR" -x --audio-format mp3 \
+					--write-subs --sub-langs all \
+					--write-thumbnail --embed-thumbnail \
+					--write-info-json \
+					-o "$VIDEO_DIR/%(title)s/%(title)s.%(ext)s" \
+					--no-overwrites --no-post-overwrites "$url"
+				read -e -p "音频下载完成，按任意键继续..." ;;
+
+			9)
+				send_stats "删除视频"
+				read -e -p "请输入删除视频名称: " rmdir
+				rm -rf "$VIDEO_DIR/$rmdir"
+				;;
+			*)
+				break ;;
+		esac
+	done
+}
+
 
 
 
@@ -3590,12 +4343,13 @@ new_ssh_port() {
 
 
 add_sshkey() {
-
+	chmod 700 ~/
+	mkdir -p ~/.ssh
+	chmod 700 ~/.ssh
+	touch ~/.ssh/authorized_keys
 	ssh-keygen -t ed25519 -C "xxxx@gmail.com" -f /root/.ssh/sshkey -N ""
-
 	cat ~/.ssh/sshkey.pub >> ~/.ssh/authorized_keys
 	chmod 600 ~/.ssh/authorized_keys
-
 
 	ip_address
 	echo -e "私钥信息已生成，务必复制保存，可保存成 ${gl_huang}${ipv4_address}_ssh.key${gl_bai} 文件，用于以后的SSH登录"
@@ -3609,6 +4363,7 @@ add_sshkey() {
 		   -e 's/^\s*#\?\s*PubkeyAuthentication .*/PubkeyAuthentication yes/' \
 		   -e 's/^\s*#\?\s*ChallengeResponseAuthentication .*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
 	rm -rf /etc/ssh/sshd_config.d/* /etc/ssh/ssh_config.d/*
+	restart_ssh
 	echo -e "${gl_lv}ROOT私钥登录已开启，已关闭ROOT密码登录，重连将会生效${gl_bai}"
 
 }
@@ -3623,6 +4378,10 @@ import_sshkey() {
 		return 1
 	fi
 
+	chmod 700 ~/
+	mkdir -p ~/.ssh
+	chmod 700 ~/.ssh
+	touch ~/.ssh/authorized_keys
 	echo "$public_key" >> ~/.ssh/authorized_keys
 	chmod 600 ~/.ssh/authorized_keys
 
@@ -3632,6 +4391,7 @@ import_sshkey() {
 		   -e 's/^\s*#\?\s*ChallengeResponseAuthentication .*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
 
 	rm -rf /etc/ssh/sshd_config.d/* /etc/ssh/ssh_config.d/*
+	restart_ssh
 	echo -e "${gl_lv}公钥已成功导入，ROOT私钥登录已开启，已关闭ROOT密码登录，重连将会生效${gl_bai}"
 
 }
@@ -3713,10 +4473,10 @@ dd_xitong() {
 			echo "11. Ubuntu 24.04              12. Ubuntu 22.04"
 			echo "13. Ubuntu 20.04              14. Ubuntu 18.04"
 			echo "------------------------"
-			echo "21. Rocky Linux 9             22. Rocky Linux 8"
-			echo "23. Alma Linux 9              24. Alma Linux 8"
-			echo "25. oracle Linux 9            26. oracle Linux 8"
-			echo "27. Fedora Linux 41           28. Fedora Linux 40"
+			echo "21. Rocky Linux 10            22. Rocky Linux 9"
+			echo "23. Alma Linux 10             24. Alma Linux 9"
+			echo "25. oracle Linux 10           26. oracle Linux 9"
+			echo "27. Fedora Linux 42           28. Fedora Linux 41"
 			echo "29. CentOS 10                 30. CentOS 9"
 			echo "------------------------"
 			echo "31. Alpine Linux              32. Arch Linux"
@@ -3791,7 +4551,7 @@ dd_xitong() {
 
 
 			  21)
-				send_stats "重装rockylinux9"
+				send_stats "重装rockylinux10"
 				dd_xitong_3
 				bash reinstall.sh rocky
 				reboot
@@ -3799,15 +4559,15 @@ dd_xitong() {
 				;;
 
 			  22)
-				send_stats "重装rockylinux8"
+				send_stats "重装rockylinux9"
 				dd_xitong_3
-				bash reinstall.sh rocky 8
+				bash reinstall.sh rocky 9
 				reboot
 				exit
 				;;
 
 			  23)
-				send_stats "重装alma9"
+				send_stats "重装alma10"
 				dd_xitong_3
 				bash reinstall.sh almalinux
 				reboot
@@ -3815,15 +4575,15 @@ dd_xitong() {
 				;;
 
 			  24)
-				send_stats "重装alma8"
+				send_stats "重装alma9"
 				dd_xitong_3
-				bash reinstall.sh almalinux 8
+				bash reinstall.sh almalinux 9
 				reboot
 				exit
 				;;
 
 			  25)
-				send_stats "重装oracle9"
+				send_stats "重装oracle10"
 				dd_xitong_3
 				bash reinstall.sh oracle
 				reboot
@@ -3831,15 +4591,15 @@ dd_xitong() {
 				;;
 
 			  26)
-				send_stats "重装oracle8"
+				send_stats "重装oracle9"
 				dd_xitong_3
-				bash reinstall.sh oracle 8
+				bash reinstall.sh oracle 9
 				reboot
 				exit
 				;;
 
 			  27)
-				send_stats "重装fedora41"
+				send_stats "重装fedora42"
 				dd_xitong_3
 				bash reinstall.sh fedora
 				reboot
@@ -3847,9 +4607,9 @@ dd_xitong() {
 				;;
 
 			  28)
-				send_stats "重装fedora40"
+				send_stats "重装fedora41"
 				dd_xitong_3
-				bash reinstall.sh fedora 40
+				bash reinstall.sh fedora 41
 				reboot
 				exit
 				;;
@@ -4057,6 +4817,7 @@ bbrv3() {
 
 		  case "$choice" in
 			[Yy])
+			check_disk_space 3
 			if [ -r /etc/os-release ]; then
 				. /etc/os-release
 				if [ "$ID" != "debian" ] && [ "$ID" != "ubuntu" ]; then
@@ -4127,6 +4888,9 @@ elrepo_install() {
 	elif [[ "$os_version" == 9 ]]; then
 		echo "安装 ELRepo 仓库配置 (版本 9)..."
 		yum -y install https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
+	elif [[ "$os_version" == 10 ]]; then
+		echo "安装 ELRepo 仓库配置 (版本 10)..."
+		yum -y install https://www.elrepo.org/elrepo-release-10.el10.elrepo.noarch.rpm
 	else
 		echo "不支持的系统版本：$os_version"
 		break_end
@@ -5121,7 +5885,7 @@ list_partitions() {
 # 挂载分区
 mount_partition() {
 	send_stats "挂载分区"
-	read -p "请输入要挂载的分区名称（例如 sda1）: " PARTITION
+	read -e -p "请输入要挂载的分区名称（例如 sda1）: " PARTITION
 
 	# 检查分区是否存在
 	if ! lsblk -o NAME | grep -w "$PARTITION" > /dev/null; then
@@ -5153,7 +5917,7 @@ mount_partition() {
 # 卸载分区
 unmount_partition() {
 	send_stats "卸载分区"
-	read -p "请输入要卸载的分区名称（例如 sda1）: " PARTITION
+	read -e -p "请输入要卸载的分区名称（例如 sda1）: " PARTITION
 
 	# 检查分区是否已经挂载
 	MOUNT_POINT=$(lsblk -o MOUNTPOINT | grep -w "$PARTITION")
@@ -5182,7 +5946,7 @@ list_mounted_partitions() {
 # 格式化分区
 format_partition() {
 	send_stats "格式化分区"
-	read -p "请输入要格式化的分区名称（例如 sda1）: " PARTITION
+	read -e -p "请输入要格式化的分区名称（例如 sda1）: " PARTITION
 
 	# 检查分区是否存在
 	if ! lsblk -o NAME | grep -w "$PARTITION" > /dev/null; then
@@ -5202,7 +5966,7 @@ format_partition() {
 	echo "2. xfs"
 	echo "3. ntfs"
 	echo "4. vfat"
-	read -p "请输入你的选择: " FS_CHOICE
+	read -e -p "请输入你的选择: " FS_CHOICE
 
 	case $FS_CHOICE in
 		1) FS_TYPE="ext4" ;;
@@ -5213,7 +5977,7 @@ format_partition() {
 	esac
 
 	# 确认格式化
-	read -p "确认格式化分区 /dev/$PARTITION 为 $FS_TYPE 吗？(y/n): " CONFIRM
+	read -e -p "确认格式化分区 /dev/$PARTITION 为 $FS_TYPE 吗？(y/n): " CONFIRM
 	if [ "$CONFIRM" != "y" ]; then
 		echo "操作已取消。"
 		return
@@ -5233,7 +5997,7 @@ format_partition() {
 # 检查分区状态
 check_partition() {
 	send_stats "检查分区状态"
-	read -p "请输入要检查的分区名称（例如 sda1）: " PARTITION
+	read -e -p "请输入要检查的分区名称（例如 sda1）: " PARTITION
 
 	# 检查分区是否存在
 	if ! lsblk -o NAME | grep -w "$PARTITION" > /dev/null; then
@@ -5261,7 +6025,7 @@ disk_manager() {
 		echo "------------------------"
 		echo "0. 返回上一级选单"
 		echo "------------------------"
-		read -p "请输入你的选择: " choice
+		read -e -p "请输入你的选择: " choice
 		case $choice in
 			1) mount_partition ;;
 			2) unmount_partition ;;
@@ -5270,7 +6034,7 @@ disk_manager() {
 			5) check_partition ;;
 			*) break ;;
 		esac
-		read -p "按回车键继续..."
+		read -e -p "按回车键继续..."
 	done
 }
 
@@ -5557,7 +6321,7 @@ rsync_manager() {
 			0) break ;;
 			*) echo "无效的选择，请重试。" ;;
 		esac
-		read -p "按回车键继续..."
+		read -e -p "按回车键继续..."
 	done
 }
 
@@ -5639,7 +6403,8 @@ linux_ps() {
 	echo -e "${gl_kjlan}虚拟内存:     ${gl_bai}$swap_info"
 	echo -e "${gl_kjlan}硬盘占用:     ${gl_bai}$disk_info"
 	echo -e "${gl_kjlan}-------------"
-	echo -e "${gl_kjlan}$output"
+	echo -e "${gl_kjlan}总接收:       ${gl_bai}$rx"
+	echo -e "${gl_kjlan}总发送:       ${gl_bai}$tx"
 	echo -e "${gl_kjlan}-------------"
 	echo -e "${gl_kjlan}网络算法:     ${gl_bai}$congestion_algorithm $queue_algorithm"
 	echo -e "${gl_kjlan}-------------"
@@ -6607,6 +7372,23 @@ fi
 }
 
 
+fix_phpfpm_conf() {
+	local container_name=$1
+	docker exec "$container_name" sh -c "mkdir -p /run/$container_name && chmod 777 /run/$container_name"
+	docker exec "$container_name" sh -c "sed -i '1i [global]\\ndaemonize = no' /usr/local/etc/php-fpm.d/www.conf"
+	docker exec "$container_name" sh -c "sed -i '/^listen =/d' /usr/local/etc/php-fpm.d/www.conf"
+	docker exec "$container_name" sh -c "echo -e '\nlisten = /run/$container_name/php-fpm.sock\nlisten.owner = www-data\nlisten.group = www-data\nlisten.mode = 0777' >> /usr/local/etc/php-fpm.d/www.conf"
+	docker exec "$container_name" sh -c "rm -f /usr/local/etc/php-fpm.d/zz-docker.conf"
+
+	find /home/web/conf.d/ -type f -name "*.conf" -exec sed -i "s#fastcgi_pass ${container_name}:9000;#fastcgi_pass unix:/run/${container_name}/php-fpm.sock;#g" {} \;
+
+}
+
+
+
+
+
+
 linux_ldnmp() {
   while true; do
 
@@ -6624,12 +7406,13 @@ linux_ldnmp() {
 	echo -e "${gl_huang}21.  ${gl_bai}仅安装nginx ${gl_huang}★${gl_bai}                     ${gl_huang}22.  ${gl_bai}站点重定向"
 	echo -e "${gl_huang}23.  ${gl_bai}站点反向代理-IP+端口 ${gl_huang}★${gl_bai}            ${gl_huang}24.  ${gl_bai}站点反向代理-域名"
 	echo -e "${gl_huang}25.  ${gl_bai}安装Bitwarden密码管理平台         ${gl_huang}26.  ${gl_bai}安装Halo博客网站"
-	echo -e "${gl_huang}27.  ${gl_bai}安装AI绘画提示词生成器            ${gl_huang}30.  ${gl_bai}自定义静态站点"
+	echo -e "${gl_huang}27.  ${gl_bai}安装AI绘画提示词生成器            ${gl_huang}28.  ${gl_bai}站点反向代理-负载均衡"
+	echo -e "${gl_huang}30.  ${gl_bai}自定义静态站点"
 	echo -e "${gl_huang}------------------------"
 	echo -e "${gl_huang}31.  ${gl_bai}站点数据管理 ${gl_huang}★${gl_bai}                    ${gl_huang}32.  ${gl_bai}备份全站数据"
 	echo -e "${gl_huang}33.  ${gl_bai}定时远程备份                      ${gl_huang}34.  ${gl_bai}还原全站数据"
 	echo -e "${gl_huang}------------------------"
-	echo -e "${gl_huang}35.  ${gl_bai}保护LDNMP环境                     ${gl_huang}36.  ${gl_bai}优化LDNMP环境"
+	echo -e "${gl_huang}35.  ${gl_bai}防护LDNMP环境                     ${gl_huang}36.  ${gl_bai}优化LDNMP环境"
 	echo -e "${gl_huang}37.  ${gl_bai}更新LDNMP环境                     ${gl_huang}38.  ${gl_bai}卸载LDNMP环境"
 	echo -e "${gl_huang}------------------------"
 	echo -e "${gl_huang}0.   ${gl_bai}返回主菜单"
@@ -6658,7 +7441,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/discuz.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6695,7 +7478,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/kdy.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6730,7 +7513,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/maccms.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6773,7 +7556,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/dujiaoka.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6821,7 +7604,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/flarum.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6872,7 +7655,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/typecho.com.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -6910,7 +7693,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/refs/heads/main/index_php.conf
 	  sed -i "s|/var/www/html/yuming.com/|/var/www/html/yuming.com/linkstack|g" /home/web/conf.d/$yuming.conf
 	  sed -i "s|yuming.com|$yuming|g" /home/web/conf.d/$yuming.conf
@@ -6946,7 +7729,7 @@ linux_ldnmp() {
 	  install_ssltls
 	  certs_status
 	  add_db
-
+	  wget -O /home/web/conf.d/map.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/map.conf
 	  wget -O /home/web/conf.d/$yuming.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/index_php.conf
 	  sed -i "s/yuming.com/$yuming/g" /home/web/conf.d/$yuming.conf
 	  nginx_http_on
@@ -7048,6 +7831,8 @@ linux_ldnmp() {
 			  echo
 			  ;;
 	  esac
+
+	  docker exec php rm -f /usr/local/etc/php/conf.d/optimized_php.ini
 
 	  restart_ldnmp
 	  ldnmp_web_on
@@ -7188,6 +7973,10 @@ linux_ldnmp() {
 
 		;;
 
+	  28)
+	  ldnmp_Proxy_backend
+		;;
+
 
 	  30)
 	  clear
@@ -7239,6 +8028,10 @@ linux_ldnmp() {
 	  nginx_web_on
 
 		;;
+
+
+
+
 
 
 
@@ -7363,273 +8156,11 @@ linux_ldnmp() {
 	  ;;
 
 	35)
-	  send_stats "LDNMP环境防御"
-	  while true; do
-		check_waf_status
-		check_cf_mode
-		if [ -x "$(command -v fail2ban-client)" ] ; then
-			clear
-			remove fail2ban
-			rm -rf /etc/fail2ban
-		else
-			  clear
-			  docker_name="fail2ban"
-			  check_docker_app
-			  echo -e "服务器网站防御程序 ${check_docker}${gl_lv}${CFmessage}${waf_status}${gl_bai}"
-			  echo "------------------------"
-			  echo "1. 安装防御程序"
-			  echo "------------------------"
-			  echo "5. 查看SSH拦截记录                6. 查看网站拦截记录"
-			  echo "7. 查看防御规则列表               8. 查看日志实时监控"
-			  echo "------------------------"
-			  echo "11. 配置拦截参数                  12. 清除所有拉黑的IP"
-			  echo "------------------------"
-			  echo "21. cloudflare模式                22. 高负载开启5秒盾"
-			  echo "------------------------"
-			  echo "31. 开启WAF                       32. 关闭WAF"
-			  echo "33. 开启DDOS防御                  34. 关闭DDOS防御"
-			  echo "------------------------"
-			  echo "9. 卸载防御程序"
-			  echo "------------------------"
-			  echo "0. 返回上一级选单"
-			  echo "------------------------"
-			  read -e -p "请输入你的选择: " sub_choice
-			  case $sub_choice in
-				  1)
-					  f2b_install_sshd
-					  cd /path/to/fail2ban/config/fail2ban/filter.d
-					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/fail2ban-nginx-cc.conf
-					  cd /path/to/fail2ban/config/fail2ban/jail.d/
-					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/nginx-docker-cc.conf
-					  sed -i "/cloudflare/d" /path/to/fail2ban/config/fail2ban/jail.d/nginx-docker-cc.conf
-					  f2b_status
-					  ;;
-				  5)
-					  echo "------------------------"
-					  f2b_sshd
-					  echo "------------------------"
-					  ;;
-				  6)
-
-					  echo "------------------------"
-					  local xxx="fail2ban-nginx-cc"
-					  f2b_status_xxx
-					  echo "------------------------"
-					  local xxx="docker-nginx-bad-request"
-					  f2b_status_xxx
-					  echo "------------------------"
-					  local xxx="docker-nginx-botsearch"
-					  f2b_status_xxx
-					  echo "------------------------"
-					  local xxx="docker-nginx-http-auth"
-					  f2b_status_xxx
-					  echo "------------------------"
-					  local xxx="docker-nginx-limit-req"
-					  f2b_status_xxx
-					  echo "------------------------"
-					  local xxx="docker-php-url-fopen"
-					  f2b_status_xxx
-					  echo "------------------------"
-
-					  ;;
-
-				  7)
-					  docker exec -it fail2ban fail2ban-client status
-					  ;;
-				  8)
-					  tail -f /path/to/fail2ban/config/log/fail2ban/fail2ban.log
-
-					  ;;
-				  9)
-					  docker rm -f fail2ban
-					  rm -rf /path/to/fail2ban
-					  crontab -l | grep -v "CF-Under-Attack.sh" | crontab - 2>/dev/null
-					  echo "Fail2Ban防御程序已卸载"
-					  ;;
-
-				  11)
-					  install nano
-					  nano /path/to/fail2ban/config/fail2ban/jail.d/nginx-docker-cc.conf
-					  f2b_status
-					  break
-					  ;;
-
-				  12)
-					  docker exec -it fail2ban fail2ban-client unban --all
-					  ;;
-
-				  21)
-					  send_stats "cloudflare模式"
-					  echo "到cf后台右上角我的个人资料，选择左侧API令牌，获取Global API Key"
-					  echo "https://dash.cloudflare.com/login"
-					  read -e -p "输入CF的账号: " cfuser
-					  read -e -p "输入CF的Global API Key: " cftoken
-
-					  wget -O /home/web/conf.d/default.conf ${gh_proxy}raw.githubusercontent.com/kejilion/nginx/main/default11.conf
-					  docker exec nginx nginx -s reload
-
-					  cd /path/to/fail2ban/config/fail2ban/jail.d/
-					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/nginx-docker-cc.conf
-
-					  cd /path/to/fail2ban/config/fail2ban/action.d
-					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/config/main/fail2ban/cloudflare-docker.conf
-
-					  sed -i "s/kejilion@outlook.com/$cfuser/g" /path/to/fail2ban/config/fail2ban/action.d/cloudflare-docker.conf
-					  sed -i "s/APIKEY00000/$cftoken/g" /path/to/fail2ban/config/fail2ban/action.d/cloudflare-docker.conf
-					  f2b_status
-
-					  echo "已配置cloudflare模式，可在cf后台，站点-安全性-事件中查看拦截记录"
-					  ;;
-
-				  22)
-					  send_stats "高负载开启5秒盾"
-					  echo -e "${gl_huang}网站每5分钟自动检测，当达检测到高负载会自动开盾，低负载也会自动关闭5秒盾。${gl_bai}"
-					  echo "--------------"
-					  echo "获取CF参数: "
-					  echo -e "到cf后台右上角我的个人资料，选择左侧API令牌，获取${gl_huang}Global API Key${gl_bai}"
-					  echo -e "到cf后台域名概要页面右下方获取${gl_huang}区域ID${gl_bai}"
-					  echo "https://dash.cloudflare.com/login"
-					  echo "--------------"
-					  read -e -p "输入CF的账号: " cfuser
-					  read -e -p "输入CF的Global API Key: " cftoken
-					  read -e -p "输入CF中域名的区域ID: " cfzonID
-
-					  cd ~
-					  install jq bc
-					  check_crontab_installed
-					  curl -sS -O ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/CF-Under-Attack.sh
-					  chmod +x CF-Under-Attack.sh
-					  sed -i "s/AAAA/$cfuser/g" ~/CF-Under-Attack.sh
-					  sed -i "s/BBBB/$cftoken/g" ~/CF-Under-Attack.sh
-					  sed -i "s/CCCC/$cfzonID/g" ~/CF-Under-Attack.sh
-
-					  local cron_job="*/5 * * * * ~/CF-Under-Attack.sh"
-
-					  local existing_cron=$(crontab -l 2>/dev/null | grep -F "$cron_job")
-
-					  if [ -z "$existing_cron" ]; then
-						  (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
-						  echo "高负载自动开盾脚本已添加"
-					  else
-						  echo "自动开盾脚本已存在，无需添加"
-					  fi
-
-					  ;;
-
-				  31)
-					  nginx_waf on
-					  echo "站点WAF已开启"
-					  send_stats "站点WAF已开启"
-					  ;;
-
-				  32)
-				  	  nginx_waf off
-					  echo "站点WAF已关闭"
-					  send_stats "站点WAF已关闭"
-					  ;;
-
-				  33)
-					  enable_ddos_defense
-					  ;;
-
-				  34)
-					  disable_ddos_defense
-					  ;;
-
-				  *)
-					  break
-					  ;;
-			  esac
-		fi
-	  break_end
-	  done
+		web_security
 		;;
 
 	36)
-		  while true; do
-			  clear
-			  send_stats "优化LDNMP环境"
-			  echo "优化LDNMP环境"
-			  echo "------------------------"
-			  echo "1. 标准模式              2. 高性能模式 (推荐2H2G以上)"
-			  echo "------------------------"
-			  echo "0. 返回上一级选单"
-			  echo "------------------------"
-			  read -e -p "请输入你的选择: " sub_choice
-			  case $sub_choice in
-				  1)
-				  send_stats "站点标准模式"
-
-				  # nginx调优
-				  sed -i 's/worker_connections.*/worker_connections 10240;/' /home/web/nginx.conf
-				  sed -i 's/worker_processes.*/worker_processes 4;/' /home/web/nginx.conf
-
-				  # php调优
-				  wget -O /home/optimized_php.ini ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/optimized_php.ini
-				  docker cp /home/optimized_php.ini php:/usr/local/etc/php/conf.d/optimized_php.ini
-				  docker cp /home/optimized_php.ini php74:/usr/local/etc/php/conf.d/optimized_php.ini
-				  rm -rf /home/optimized_php.ini
-
-				  # php调优
-				  wget -O /home/www.conf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/www-1.conf
-				  docker cp /home/www.conf php:/usr/local/etc/php-fpm.d/www.conf
-				  docker cp /home/www.conf php74:/usr/local/etc/php-fpm.d/www.conf
-				  rm -rf /home/www.conf
-
-				  # mysql调优
-				  wget -O /home/custom_mysql_config.cnf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/custom_mysql_config-1.cnf
-				  docker cp /home/custom_mysql_config.cnf mysql:/etc/mysql/conf.d/
-				  rm -rf /home/custom_mysql_config.cnf
-
-
-				  cd /home/web && docker compose restart
-
-				  restart_redis
-				  optimize_balanced
-
-
-				  echo "LDNMP环境已设置成 标准模式"
-
-					  ;;
-				  2)
-				  send_stats "站点高性能模式"
-
-				  # nginx调优
-				  sed -i 's/worker_connections.*/worker_connections 20480;/' /home/web/nginx.conf
-				  sed -i 's/worker_processes.*/worker_processes 8;/' /home/web/nginx.conf
-
-				  # php调优
-				  wget -O /home/optimized_php.ini ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/optimized_php.ini
-				  docker cp /home/optimized_php.ini php:/usr/local/etc/php/conf.d/optimized_php.ini
-				  docker cp /home/optimized_php.ini php74:/usr/local/etc/php/conf.d/optimized_php.ini
-				  rm -rf /home/optimized_php.ini
-
-				  # php调优
-				  wget -O /home/www.conf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/www.conf
-				  docker cp /home/www.conf php:/usr/local/etc/php-fpm.d/www.conf
-				  docker cp /home/www.conf php74:/usr/local/etc/php-fpm.d/www.conf
-				  rm -rf /home/www.conf
-
-				  # mysql调优
-				  wget -O /home/custom_mysql_config.cnf ${gh_proxy}raw.githubusercontent.com/kejilion/sh/main/custom_mysql_config.cnf
-				  docker cp /home/custom_mysql_config.cnf mysql:/etc/mysql/conf.d/
-				  rm -rf /home/custom_mysql_config.cnf
-
-				  cd /home/web && docker compose restart
-
-				  restart_redis
-				  optimize_web_server
-
-				  echo "LDNMP环境已设置成 高性能模式"
-
-					  ;;
-				  *)
-					  break
-					  ;;
-			  esac
-			  break_end
-
-		  done
+		web_optimization
 		;;
 
 
@@ -7712,31 +8243,17 @@ linux_ldnmp() {
 			  docker exec php mkdir -p /usr/local/bin/
 			  docker cp /usr/local/bin/install-php-extensions php:/usr/local/bin/
 			  docker exec php chmod +x /usr/local/bin/install-php-extensions
-
-			  docker exec php sh -c "\
-							apk add --no-cache imagemagick imagemagick-dev \
-							&& apk add --no-cache git autoconf gcc g++ make pkgconfig \
-							&& rm -rf /tmp/imagick \
-							&& git clone ${gh_proxy}github.com/Imagick/imagick /tmp/imagick \
-							&& cd /tmp/imagick \
-							&& phpize \
-							&& ./configure \
-							&& make \
-							&& make install \
-							&& echo 'extension=imagick.so' > /usr/local/etc/php/conf.d/imagick.ini \
-							&& rm -rf /tmp/imagick"
-
-
-			  docker exec php install-php-extensions mysqli pdo_mysql gd intl zip exif bcmath opcache redis
+			  docker exec php install-php-extensions mysqli pdo_mysql gd intl zip exif bcmath opcache redis imagick
 
 
 			  docker exec php sh -c 'echo "upload_max_filesize=50M " > /usr/local/etc/php/conf.d/uploads.ini' > /dev/null 2>&1
 			  docker exec php sh -c 'echo "post_max_size=50M " > /usr/local/etc/php/conf.d/post.ini' > /dev/null 2>&1
-			  docker exec php sh -c 'echo "memory_limit=256M" > /usr/local/etc/php/conf.d/memory.ini' > /dev/null 2>&1
+			  docker exec php sh -c 'echo "memory_limit=512M" > /usr/local/etc/php/conf.d/memory.ini' > /dev/null 2>&1
 			  docker exec php sh -c 'echo "max_execution_time=1200" > /usr/local/etc/php/conf.d/max_execution_time.ini' > /dev/null 2>&1
 			  docker exec php sh -c 'echo "max_input_time=600" > /usr/local/etc/php/conf.d/max_input_time.ini' > /dev/null 2>&1
-			  docker exec php sh -c 'echo "max_input_vars=3000" > /usr/local/etc/php/conf.d/max_input_vars.ini' > /dev/null 2>&1
+			  docker exec php sh -c 'echo "max_input_vars=5000" > /usr/local/etc/php/conf.d/max_input_vars.ini' > /dev/null 2>&1
 
+			  fix_phpfpm_con $ldnmp_pods
 
 			  docker restart $ldnmp_pods > /dev/null 2>&1
 			  cp /home/web/docker-compose1.yml /home/web/docker-compose.yml
@@ -7750,8 +8267,8 @@ linux_ldnmp() {
 			  docker rm -f $ldnmp_pods
 			  docker images --filter=reference="$ldnmp_pods*" -q | xargs docker rmi > /dev/null 2>&1
 			  docker compose up -d --force-recreate $ldnmp_pods
-			  restart_redis
 			  docker restart $ldnmp_pods > /dev/null 2>&1
+			  restart_redis
 			  send_stats "更新$ldnmp_pods"
 			  echo "更新${ldnmp_pods}完成"
 
@@ -7829,7 +8346,7 @@ linux_panel() {
 	  echo -e "${gl_kjlan}------------------------"
 	  echo -e "${gl_kjlan}1.   ${gl_bai}宝塔面板官方版                      ${gl_kjlan}2.   ${gl_bai}aaPanel宝塔国际版"
 	  echo -e "${gl_kjlan}3.   ${gl_bai}1Panel新一代管理面板                ${gl_kjlan}4.   ${gl_bai}NginxProxyManager可视化面板"
-	  echo -e "${gl_kjlan}5.   ${gl_bai}AList多存储文件列表程序             ${gl_kjlan}6.   ${gl_bai}Ubuntu远程桌面网页版"
+	  echo -e "${gl_kjlan}5.   ${gl_bai}OpenList多存储文件列表程序          ${gl_kjlan}6.   ${gl_bai}Ubuntu远程桌面网页版"
 	  echo -e "${gl_kjlan}7.   ${gl_bai}哪吒探针VPS监控面板                 ${gl_kjlan}8.   ${gl_bai}QB离线BT磁力下载面板"
 	  echo -e "${gl_kjlan}9.   ${gl_bai}Poste.io邮件服务器程序              ${gl_kjlan}10.  ${gl_bai}RocketChat多人在线聊天系统"
 	  echo -e "${gl_kjlan}------------------------"
@@ -7852,18 +8369,27 @@ linux_panel() {
 	  echo -e "${gl_kjlan}39.  ${gl_bai}Bililive直播录制工具                ${gl_kjlan}40.  ${gl_bai}webssh网页版SSH连接工具"
 	  echo -e "${gl_kjlan}------------------------"
 	  echo -e "${gl_kjlan}41.  ${gl_bai}耗子管理面板                	 ${gl_kjlan}42.  ${gl_bai}Nexterm远程连接工具"
-	  echo -e "${gl_kjlan}43.  ${gl_bai}RustDesk远程桌面(服务端)            ${gl_kjlan}44.  ${gl_bai}RustDesk远程桌面(中继端)"
-	  echo -e "${gl_kjlan}45.  ${gl_bai}Docker加速站            		 ${gl_kjlan}46.  ${gl_bai}GitHub加速站"
+	  echo -e "${gl_kjlan}43.  ${gl_bai}RustDesk远程桌面(服务端) ${gl_huang}★${gl_bai}          ${gl_kjlan}44.  ${gl_bai}RustDesk远程桌面(中继端) ${gl_huang}★${gl_bai}"
+	  echo -e "${gl_kjlan}45.  ${gl_bai}Docker加速站            		 ${gl_kjlan}46.  ${gl_bai}GitHub加速站 ${gl_huang}★${gl_bai}"
 	  echo -e "${gl_kjlan}47.  ${gl_bai}普罗米修斯监控			 ${gl_kjlan}48.  ${gl_bai}普罗米修斯(主机监控)"
 	  echo -e "${gl_kjlan}49.  ${gl_bai}普罗米修斯(容器监控)		 ${gl_kjlan}50.  ${gl_bai}补货监控工具"
 	  echo -e "${gl_kjlan}------------------------"
 	  echo -e "${gl_kjlan}51.  ${gl_bai}PVE开小鸡面板			 ${gl_kjlan}52.  ${gl_bai}DPanel容器管理面板"
 	  echo -e "${gl_kjlan}53.  ${gl_bai}llama3聊天AI大模型                  ${gl_kjlan}54.  ${gl_bai}AMH主机建站管理面板"
-	  echo -e "${gl_kjlan}55.  ${gl_bai}FRP内网穿透(服务端)		 ${gl_kjlan}56.  ${gl_bai}FRP内网穿透(客户端)"
-	  echo -e "${gl_kjlan}57.  ${gl_bai}Deepseek聊天AI大模型                ${gl_kjlan}58.  ${gl_bai}Dify大模型知识库"
+	  echo -e "${gl_kjlan}55.  ${gl_bai}FRP内网穿透(服务端) ${gl_huang}★${gl_bai}	         ${gl_kjlan}56.  ${gl_bai}FRP内网穿透(客户端) ${gl_huang}★${gl_bai}"
+	  echo -e "${gl_kjlan}57.  ${gl_bai}Deepseek聊天AI大模型                ${gl_kjlan}58.  ${gl_bai}Dify大模型知识库 ${gl_huang}★${gl_bai}"
 	  echo -e "${gl_kjlan}59.  ${gl_bai}NewAPI大模型资产管理                ${gl_kjlan}60.  ${gl_bai}JumpServer开源堡垒机"
 	  echo -e "${gl_kjlan}------------------------"
 	  echo -e "${gl_kjlan}61.  ${gl_bai}在线翻译服务器			 ${gl_kjlan}62.  ${gl_bai}RAGFlow大模型知识库"
+	  echo -e "${gl_kjlan}63.  ${gl_bai}OpenWebUI自托管AI平台 ${gl_huang}★${gl_bai}             ${gl_kjlan}64.  ${gl_bai}it-tools工具箱"
+	  echo -e "${gl_kjlan}65.  ${gl_bai}n8n自动化工作流平台 ${gl_huang}★${gl_bai}               ${gl_kjlan}66.  ${gl_bai}yt-dlp视频下载工具"
+	  echo -e "${gl_kjlan}67.  ${gl_bai}ddns-go动态DNS管理工具 ${gl_huang}★${gl_bai}            ${gl_kjlan}68.  ${gl_bai}AllinSSL证书管理平台"
+	  echo -e "${gl_kjlan}69.  ${gl_bai}SFTPGo文件传输工具                  ${gl_kjlan}70.  ${gl_bai}AstrBot聊天机器人框架"
+	  echo -e "${gl_kjlan}------------------------"
+	  echo -e "${gl_kjlan}71.  ${gl_bai}Navidrome私有音乐服务器             ${gl_kjlan}72.  ${gl_bai}bitwarden密码管理器 ${gl_huang}★${gl_bai}"
+	  echo -e "${gl_kjlan}73.  ${gl_bai}LibreTV私有影视                     ${gl_kjlan}74.  ${gl_bai}MoonTV私有影视"
+	  echo -e "${gl_kjlan}75.  ${gl_bai}Melody音乐精灵                      ${gl_kjlan}76.  ${gl_bai}在线DOS老游戏"
+	  echo -e "${gl_kjlan}77.  ${gl_bai}迅雷离线下载工具                    ${gl_kjlan}78.  ${gl_bai}PandaWiki智能文档管理系统"
 	  echo -e "${gl_kjlan}------------------------"
 	  echo -e "${gl_kjlan}0.   ${gl_bai}返回主菜单"
 	  echo -e "${gl_kjlan}------------------------${gl_bai}"
@@ -7946,16 +8472,23 @@ linux_panel() {
 			local docker_name="npm"
 			local docker_img="jc21/nginx-proxy-manager:latest"
 			local docker_port=81
-			local docker_rum="docker run -d \
-						  --name=$docker_name \
-						  -p 80:80 \
-						  -p 81:$docker_port \
-						  -p 443:443 \
-						  -v /home/docker/npm/data:/data \
-						  -v /home/docker/npm/letsencrypt:/etc/letsencrypt \
-						  --restart=always \
-						  $docker_img"
-			local docker_describe="如果您已经安装了其他面板或者LDNMP建站环境，建议先卸载，再安装npm！"
+
+			docker_rum() {
+
+				docker run -d \
+				  --name=$docker_name \
+				  -p ${docker_port}:81 \
+				  -p 80:80 \
+				  -p 443:443 \
+				  -v /home/docker/npm/data:/data \
+				  -v /home/docker/npm/letsencrypt:/etc/letsencrypt \
+				  --restart=always \
+				  $docker_img
+
+
+			}
+
+			local docker_describe="一个Nginx反向代理工具面板，不支持添加域名访问。"
 			local docker_url="官网介绍: https://nginxproxymanager.com/"
 			local docker_use="echo \"初始用户名: admin@example.com\""
 			local docker_passwd="echo \"初始密码: changeme\""
@@ -7967,21 +8500,28 @@ linux_panel() {
 
 		  5)
 
-			local docker_name="alist"
-			local docker_img="xhofe/alist-aria2:latest"
+			local docker_name="openlist"
+			local docker_img="openlistteam/openlist:latest-aria2"
 			local docker_port=5244
-			local docker_rum="docker run -d \
-								--restart=always \
-								-v /home/docker/alist:/opt/alist/data \
-								-p 5244:5244 \
-								-e PUID=0 \
-								-e PGID=0 \
-								-e UMASK=022 \
-								--name="alist" \
-								xhofe/alist-aria2:latest"
+
+			docker_rum() {
+
+				docker run -d \
+					--restart=always \
+					-v /home/docker/openlist:/opt/openlist/data \
+					-p ${docker_port}:5244 \
+					-e PUID=0 \
+					-e PGID=0 \
+					-e UMASK=022 \
+					--name="openlist" \
+					openlistteam/openlist:latest-aria2
+
+			}
+
+
 			local docker_describe="一个支持多种存储，支持网页浏览和 WebDAV 的文件列表程序，由 gin 和 Solidjs 驱动"
-			local docker_url="官网介绍: https://alist.nn.ci/zh/"
-			local docker_use="docker exec -it alist ./alist admin random"
+			local docker_url="官网介绍: https://github.com/OpenListTeam/OpenList"
+			local docker_use="docker exec -it openlist ./openlist admin random"
 			local docker_passwd=""
 			local app_size="1"
 			docker_app
@@ -7993,25 +8533,35 @@ linux_panel() {
 			local docker_name="webtop-ubuntu"
 			local docker_img="lscr.io/linuxserver/webtop:ubuntu-kde"
 			local docker_port=3006
-			local docker_rum="docker run -d \
-						  --name=webtop-ubuntu \
-						  --security-opt seccomp=unconfined \
-						  -e PUID=1000 \
-						  -e PGID=1000 \
-						  -e TZ=Etc/UTC \
-						  -e SUBFOLDER=/ \
-						  -e TITLE=Webtop \
-						  -p 3006:3000 \
-						  -v /home/docker/webtop/data:/config \
-						  -v /var/run/docker.sock:/var/run/docker.sock \
-						  --shm-size="1gb" \
-						  --restart unless-stopped \
-						  lscr.io/linuxserver/webtop:ubuntu-kde"
 
-			local docker_describe="webtop基于Ubuntu的容器，包含官方支持的完整桌面环境，可通过任何现代 Web 浏览器访问"
+			docker_rum() {
+
+
+				docker run -d \
+				  --name=webtop-ubuntu \
+				  --security-opt seccomp=unconfined \
+				  -e PUID=1000 \
+				  -e PGID=1000 \
+				  -e TZ=Etc/UTC \
+				  -e SUBFOLDER=/ \
+				  -e TITLE=Webtop \
+				  -e CUSTOM_USER=ubuntu-abc \
+				  -e PASSWORD=ubuntuABC123 \
+				  -p ${docker_port}:3000 \
+				  -v /home/docker/webtop/data:/config \
+				  -v /var/run/docker.sock:/var/run/docker.sock \
+				  --shm-size="1gb" \
+				  --restart unless-stopped \
+				  lscr.io/linuxserver/webtop:ubuntu-kde
+
+
+			}
+
+
+			local docker_describe="webtop基于Ubuntu的容器。若IP无法访问，请添加域名访问。"
 			local docker_url="官网介绍: https://docs.linuxserver.io/images/docker-webtop/"
-			local docker_use=""
-			local docker_passwd=""
+			local docker_use="echo \"用户名: ubuntu-abc\""
+			local docker_passwd="echo \"密码: ubuntuABC123\""
 			local app_size="2"
 			docker_app
 
@@ -8028,7 +8578,7 @@ linux_panel() {
 				clear
 				echo -e "哪吒监控 $check_docker $update_status"
 				echo "开源、轻量、易用的服务器监控与运维工具"
-				echo "视频介绍: https://www.bilibili.com/video/BV1wv421C71t?t=0.1"
+				echo "官网搭建文档: https://nezha.wiki/guide/dashboard.html"
 				if docker inspect "$docker_name" &>/dev/null; then
 					local docker_port=$(docker port $docker_name | awk -F'[:]' '/->/ {print $NF}' | uniq)
 					check_docker_app_ip
@@ -8036,9 +8586,6 @@ linux_panel() {
 				echo ""
 				echo "------------------------"
 				echo "1. 使用"
-				echo "------------------------"
-				echo "5. 添加域名访问       6. 删除域名访问"
-				echo "7. 允许IP+端口访问    8. 阻止IP+端口访问"
 				echo "------------------------"
 				echo "0. 返回上一级选单"
 				echo "------------------------"
@@ -8052,28 +8599,6 @@ linux_panel() {
 						curl -sL ${gh_proxy}raw.githubusercontent.com/nezhahq/scripts/refs/heads/main/install.sh -o nezha.sh && chmod +x nezha.sh && ./nezha.sh
 						local docker_port=$(docker port $docker_name | awk -F'[:]' '/->/ {print $NF}' | uniq)
 						check_docker_app_ip
-						;;
-					5)
-						echo "${docker_name}域名访问设置"
-						send_stats "${docker_name}域名访问设置"
-						add_yuming
-						ldnmp_Proxy ${yuming} ${ipv4_address} ${docker_port}
-						block_container_port "$docker_name" "$ipv4_address"
-						;;
-
-					6)
-						echo "域名格式 example.com 不带https://"
-						web_del
-						;;
-
-					7)
-						send_stats "允许IP访问 ${docker_name}"
-						clear_container_rules "$docker_name" "$ipv4_address"
-						;;
-
-					8)
-						send_stats "阻止IP访问 ${docker_name}"
-						block_container_port "$docker_name" "$ipv4_address"
 						;;
 
 					*)
@@ -8090,19 +8615,26 @@ linux_panel() {
 			local docker_name="qbittorrent"
 			local docker_img="lscr.io/linuxserver/qbittorrent:latest"
 			local docker_port=8081
-			local docker_rum="docker run -d \
-								  --name=qbittorrent \
-								  -e PUID=1000 \
-								  -e PGID=1000 \
-								  -e TZ=Etc/UTC \
-								  -e WEBUI_PORT=8081 \
-								  -p 8081:8081 \
-								  -p 6881:6881 \
-								  -p 6881:6881/udp \
-								  -v /home/docker/qbittorrent/config:/config \
-								  -v /home/docker/qbittorrent/downloads:/downloads \
-								  --restart unless-stopped \
-								  lscr.io/linuxserver/qbittorrent:latest"
+
+			docker_rum() {
+
+				docker run -d \
+				  --name=qbittorrent \
+				  -e PUID=1000 \
+				  -e PGID=1000 \
+				  -e TZ=Etc/UTC \
+				  -e WEBUI_PORT=${docker_port} \
+				  -e TORRENTING_PORT=56881 \
+				  -p ${docker_port}:${docker_port} \
+				  -p 56881:56881 \
+				  -p 56881:56881/udp \
+				  -v /home/docker/qbittorrent/config:/config \
+				  -v /home/docker/qbittorrent/downloads:/downloads \
+				  --restart unless-stopped \
+				  lscr.io/linuxserver/qbittorrent:latest
+
+			}
+
 			local docker_describe="qbittorrent离线BT磁力下载服务"
 			local docker_url="官网介绍: https://hub.docker.com/r/linuxserver/qbittorrent"
 			local docker_use="sleep 3"
@@ -8245,7 +8777,7 @@ linux_panel() {
 				sleep 1
 				docker exec -it db mongosh --eval "printjson(rs.initiate())"
 				sleep 5
-				docker run --name rocketchat --restart=always -p 3897:3000 --link db --env ROOT_URL=http://localhost --env MONGO_OPLOG_URL=mongodb://db:27017/rs5 -d rocket.chat
+				docker run --name rocketchat --restart=always -p ${docker_port}:3000 --link db --env ROOT_URL=http://localhost --env MONGO_OPLOG_URL=mongodb://db:27017/rs5 -d rocket.chat
 
 				clear
 				ip_address
@@ -8256,7 +8788,7 @@ linux_panel() {
 			docker_app_update() {
 				docker rm -f rocketchat
 				docker rmi -f rocket.chat:latest
-				docker run --name rocketchat --restart=always -p 3897:3000 --link db --env ROOT_URL=http://localhost --env MONGO_OPLOG_URL=mongodb://db:27017/rs5 -d rocket.chat
+				docker run --name rocketchat --restart=always -p ${docker_port}:3000 --link db --env ROOT_URL=http://localhost --env MONGO_OPLOG_URL=mongodb://db:27017/rs5 -d rocket.chat
 				clear
 				ip_address
 				echo "rocket.chat已经安装完成"
@@ -8281,14 +8813,23 @@ linux_panel() {
 			local docker_name="zentao-server"
 			local docker_img="idoop/zentao:latest"
 			local docker_port=82
-			local docker_rum="docker run -d -p 82:80 -p 3308:3306 \
-							  -e ADMINER_USER="root" -e ADMINER_PASSWD="password" \
-							  -e BIND_ADDRESS="false" \
-							  -v /home/docker/zentao-server/:/opt/zbox/ \
-							  --add-host smtp.exmail.qq.com:163.177.90.125 \
-							  --name zentao-server \
-							  --restart=always \
-							  idoop/zentao:latest"
+
+
+			docker_rum() {
+
+
+				docker run -d -p ${docker_port}:80 \
+				  -e ADMINER_USER="root" -e ADMINER_PASSWD="password" \
+				  -e BIND_ADDRESS="false" \
+				  -v /home/docker/zentao-server/:/opt/zbox/ \
+				  --add-host smtp.exmail.qq.com:163.177.90.125 \
+				  --name zentao-server \
+				  --restart=always \
+				  idoop/zentao:latest
+
+
+			}
+
 			local docker_describe="禅道是通用的项目管理软件"
 			local docker_url="官网介绍: https://www.zentao.net/"
 			local docker_use="echo \"初始用户名: admin\""
@@ -8302,13 +8843,21 @@ linux_panel() {
 			local docker_name="qinglong"
 			local docker_img="whyour/qinglong:latest"
 			local docker_port=5700
-			local docker_rum="docker run -d \
-					  -v /home/docker/qinglong/data:/ql/data \
-					  -p 5700:5700 \
-					  --name qinglong \
-					  --hostname qinglong \
-					  --restart unless-stopped \
-					  whyour/qinglong:latest"
+
+			docker_rum() {
+
+
+				docker run -d \
+				  -v /home/docker/qinglong/data:/ql/data \
+				  -p ${docker_port}:5700 \
+				  --name qinglong \
+				  --hostname qinglong \
+				  --restart unless-stopped \
+				  whyour/qinglong:latest
+
+
+			}
+
 			local docker_describe="青龙面板是一个定时任务管理平台"
 			local docker_url="官网介绍: ${gh_proxy}github.com/whyour/qinglong"
 			local docker_use=""
@@ -8329,12 +8878,12 @@ linux_panel() {
 			docker_app_install() {
 				cd /home/ && mkdir -p docker/cloud && cd docker/cloud && mkdir temp_data && mkdir -vp cloudreve/{uploads,avatar} && touch cloudreve/conf.ini && touch cloudreve/cloudreve.db && mkdir -p aria2/config && mkdir -p data/aria2 && chmod -R 777 data/aria2
 				curl -o /home/docker/cloud/docker-compose.yml ${gh_proxy}raw.githubusercontent.com/kejilion/docker/main/cloudreve-docker-compose.yml
-				cd /home/docker/cloud/ && docker compose up -d
+				sed -i "s/5212:5212/${docker_port}:5212/g" /home/docker/cloud/docker-compose.yml
+				cd /home/docker/cloud/
+				docker compose up -d
 				clear
 				echo "已经安装完成"
 				check_docker_app_ip
-				sleep 3
-				docker logs cloudreve
 			}
 
 
@@ -8357,16 +8906,21 @@ linux_panel() {
 			local docker_name="easyimage"
 			local docker_img="ddsderek/easyimage:latest"
 			local docker_port=85
-			local docker_rum="docker run -d \
-					  --name easyimage \
-					  -p 85:80 \
-					  -e TZ=Asia/Shanghai \
-					  -e PUID=1000 \
-					  -e PGID=1000 \
-					  -v /home/docker/easyimage/config:/app/web/config \
-					  -v /home/docker/easyimage/i:/app/web/i \
-					  --restart unless-stopped \
-					  ddsderek/easyimage:latest"
+			docker_rum() {
+
+				docker run -d \
+				  --name easyimage \
+				  -p ${docker_port}:80 \
+				  -e TZ=Asia/Shanghai \
+				  -e PUID=1000 \
+				  -e PGID=1000 \
+				  -v /home/docker/easyimage/config:/app/web/config \
+				  -v /home/docker/easyimage/i:/app/web/i \
+				  --restart unless-stopped \
+				  ddsderek/easyimage:latest
+
+			}
+
 			local docker_describe="简单图床是一个简单的图床程序"
 			local docker_url="官网介绍: ${gh_proxy}github.com/icret/EasyImages2.0"
 			local docker_use=""
@@ -8379,14 +8933,21 @@ linux_panel() {
 			local docker_name="emby"
 			local docker_img="linuxserver/emby:latest"
 			local docker_port=8096
-			local docker_rum="docker run -d --name=emby --restart=always \
-						-v /home/docker/emby/config:/config \
-						-v /home/docker/emby/share1:/mnt/share1 \
-						-v /home/docker/emby/share2:/mnt/share2 \
-						-v /mnt/notify:/mnt/notify \
-						-p 8096:8096 -p 8920:8920 \
-						-e UID=1000 -e GID=100 -e GIDLIST=100 \
-						linuxserver/emby:latest"
+
+			docker_rum() {
+
+				docker run -d --name=emby --restart=always \
+					-v /home/docker/emby/config:/config \
+					-v /home/docker/emby/share1:/mnt/share1 \
+					-v /home/docker/emby/share2:/mnt/share2 \
+					-v /mnt/notify:/mnt/notify \
+					-p ${docker_port}:8096 \
+					-e UID=1000 -e GID=100 -e GIDLIST=100 \
+					linuxserver/emby:latest
+
+			}
+
+
 			local docker_describe="emby是一个主从式架构的媒体服务器软件，可以用来整理服务器上的视频和音频，并将音频和视频流式传输到客户端设备"
 			local docker_url="官网介绍: https://emby.media/"
 			local docker_use=""
@@ -8399,7 +8960,14 @@ linux_panel() {
 			local docker_name="looking-glass"
 			local docker_img="wikihostinc/looking-glass-server"
 			local docker_port=89
-			local docker_rum="docker run -d --name looking-glass --restart always -p 89:80 wikihostinc/looking-glass-server"
+
+
+			docker_rum() {
+
+				docker run -d --name looking-glass --restart always -p ${docker_port}:80 wikihostinc/looking-glass-server
+
+			}
+
 			local docker_describe="Speedtest测速面板是一个VPS网速测试工具，多项测试功能，还可以实时监控VPS进出站流量"
 			local docker_url="官网介绍: ${gh_proxy}github.com/wikihost-opensource/als"
 			local docker_use=""
@@ -8413,15 +8981,23 @@ linux_panel() {
 			local docker_name="adguardhome"
 			local docker_img="adguard/adguardhome"
 			local docker_port=3000
-			local docker_rum="docker run -d \
-							--name adguardhome \
-							-v /home/docker/adguardhome/work:/opt/adguardhome/work \
-							-v /home/docker/adguardhome/conf:/opt/adguardhome/conf \
-							-p 53:53/tcp \
-							-p 53:53/udp \
-							-p 3000:3000/tcp \
-							--restart always \
-							adguard/adguardhome"
+
+			docker_rum() {
+
+				docker run -d \
+					--name adguardhome \
+					-v /home/docker/adguardhome/work:/opt/adguardhome/work \
+					-v /home/docker/adguardhome/conf:/opt/adguardhome/conf \
+					-p 53:53/tcp \
+					-p 53:53/udp \
+					-p ${docker_port}:3000/tcp \
+					--restart always \
+					adguard/adguardhome
+
+
+			}
+
+
 			local docker_describe="AdGuardHome是一款全网广告拦截与反跟踪软件，未来将不止是一个DNS服务器。"
 			local docker_url="官网介绍: https://hub.docker.com/r/adguard/adguardhome"
 			local docker_use=""
@@ -8437,12 +9013,19 @@ linux_panel() {
 			local docker_name="onlyoffice"
 			local docker_img="onlyoffice/documentserver"
 			local docker_port=8082
-			local docker_rum="docker run -d -p 8082:80 \
-						--restart=always \
-						--name onlyoffice \
-						-v /home/docker/onlyoffice/DocumentServer/logs:/var/log/onlyoffice  \
-						-v /home/docker/onlyoffice/DocumentServer/data:/var/www/onlyoffice/Data  \
-						 onlyoffice/documentserver"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:80 \
+					--restart=always \
+					--name onlyoffice \
+					-v /home/docker/onlyoffice/DocumentServer/logs:/var/log/onlyoffice  \
+					-v /home/docker/onlyoffice/DocumentServer/data:/var/www/onlyoffice/Data  \
+					 onlyoffice/documentserver
+
+
+			}
+
 			local docker_describe="onlyoffice是一款开源的在线office工具，太强大了！"
 			local docker_url="官网介绍: https://www.onlyoffice.com/"
 			local docker_use=""
@@ -8518,13 +9101,20 @@ linux_panel() {
 			local docker_name="portainer"
 			local docker_img="portainer/portainer"
 			local docker_port=9050
-			local docker_rum="docker run -d \
+
+			docker_rum() {
+
+				docker run -d \
 					--name portainer \
-					-p 9050:9000 \
+					-p ${docker_port}:9000 \
 					-v /var/run/docker.sock:/var/run/docker.sock \
 					-v /home/docker/portainer:/data \
 					--restart always \
-					portainer/portainer"
+					portainer/portainer
+
+			}
+
+
 			local docker_describe="portainer是一个轻量级的docker容器管理面板"
 			local docker_url="官网介绍: https://www.portainer.io/"
 			local docker_use=""
@@ -8538,7 +9128,15 @@ linux_panel() {
 			local docker_name="vscode-web"
 			local docker_img="codercom/code-server"
 			local docker_port=8180
-			local docker_rum="docker run -d -p 8180:8080 -v /home/docker/vscode-web:/home/coder/.local/share/code-server --name vscode-web --restart always codercom/code-server"
+
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:8080 -v /home/docker/vscode-web:/home/coder/.local/share/code-server --name vscode-web --restart always codercom/code-server
+
+			}
+
+
 			local docker_describe="VScode是一款强大的在线代码编写工具"
 			local docker_url="官网介绍: ${gh_proxy}github.com/coder/code-server"
 			local docker_use="sleep 3"
@@ -8550,12 +9148,20 @@ linux_panel() {
 			local docker_name="uptime-kuma"
 			local docker_img="louislam/uptime-kuma:latest"
 			local docker_port=3003
-			local docker_rum="docker run -d \
-							--name=uptime-kuma \
-							-p 3003:3001 \
-							-v /home/docker/uptime-kuma/uptime-kuma-data:/app/data \
-							--restart=always \
-							louislam/uptime-kuma:latest"
+
+
+			docker_rum() {
+
+				docker run -d \
+					--name=uptime-kuma \
+					-p ${docker_port}:3001 \
+					-v /home/docker/uptime-kuma/uptime-kuma-data:/app/data \
+					--restart=always \
+					louislam/uptime-kuma:latest
+
+			}
+
+
 			local docker_describe="Uptime Kuma 易于使用的自托管监控工具"
 			local docker_url="官网介绍: ${gh_proxy}github.com/louislam/uptime-kuma"
 			local docker_use=""
@@ -8568,7 +9174,13 @@ linux_panel() {
 			local docker_name="memos"
 			local docker_img="ghcr.io/usememos/memos:latest"
 			local docker_port=5230
-			local docker_rum="docker run -d --name memos -p 5230:5230 -v /home/docker/memos:/var/opt/memos --restart always ghcr.io/usememos/memos:latest"
+
+			docker_rum() {
+
+				docker run -d --name memos -p ${docker_port}:5230 -v /home/docker/memos:/var/opt/memos --restart always ghcr.io/usememos/memos:latest
+
+			}
+
 			local docker_describe="Memos是一款轻量级、自托管的备忘录中心"
 			local docker_url="官网介绍: ${gh_proxy}github.com/usememos/memos"
 			local docker_use=""
@@ -8581,28 +9193,38 @@ linux_panel() {
 			local docker_name="webtop"
 			local docker_img="lscr.io/linuxserver/webtop:latest"
 			local docker_port=3083
-			local docker_rum="docker run -d \
-						  --name=webtop \
-						  --security-opt seccomp=unconfined \
-						  -e PUID=1000 \
-						  -e PGID=1000 \
-						  -e TZ=Etc/UTC \
-						  -e SUBFOLDER=/ \
-						  -e TITLE=Webtop \
-						  -e LC_ALL=zh_CN.UTF-8 \
-						  -e DOCKER_MODS=linuxserver/mods:universal-package-install \
-						  -e INSTALL_PACKAGES=font-noto-cjk \
-						  -p 3083:3000 \
-						  -v /home/docker/webtop/data:/config \
-						  -v /var/run/docker.sock:/var/run/docker.sock \
-						  --shm-size="1gb" \
-						  --restart unless-stopped \
-						  lscr.io/linuxserver/webtop:latest"
 
-			local docker_describe="webtop基于 Alpine、Ubuntu、Fedora 和 Arch 的容器，包含官方支持的完整桌面环境，可通过任何现代 Web 浏览器访问"
+			docker_rum() {
+
+
+				docker run -d \
+				  --name=webtop \
+				  --security-opt seccomp=unconfined \
+				  -e PUID=1000 \
+				  -e PGID=1000 \
+				  -e TZ=Etc/UTC \
+				  -e SUBFOLDER=/ \
+				  -e TITLE=Webtop \
+				  -e CUSTOM_USER=webtop-abc \
+				  -e PASSWORD=webtopABC123 \
+				  -e LC_ALL=zh_CN.UTF-8 \
+				  -e DOCKER_MODS=linuxserver/mods:universal-package-install \
+				  -e INSTALL_PACKAGES=font-noto-cjk \
+				  -p ${docker_port}:3000 \
+				  -v /home/docker/webtop/data:/config \
+				  -v /var/run/docker.sock:/var/run/docker.sock \
+				  --shm-size="1gb" \
+				  --restart unless-stopped \
+				  lscr.io/linuxserver/webtop:latest
+
+
+			}
+
+
+			local docker_describe="webtop基于Alpine的中文版容器。若IP无法访问，请添加域名访问。"
 			local docker_url="官网介绍: https://docs.linuxserver.io/images/docker-webtop/"
-			local docker_use=""
-			local docker_passwd=""
+			local docker_use="echo \"用户名: webtop-abc\""
+			local docker_passwd="echo \"密码: webtopABC123\""
 			local app_size="2"
 			docker_app
 			  ;;
@@ -8612,7 +9234,13 @@ linux_panel() {
 			local docker_img="nextcloud:latest"
 			local docker_port=8989
 			local rootpasswd=$(< /dev/urandom tr -dc _A-Z-a-z-0-9 | head -c16)
-			local docker_rum="docker run -d --name nextcloud --restart=always -p 8989:80 -v /home/docker/nextcloud:/var/www/html -e NEXTCLOUD_ADMIN_USER=nextcloud -e NEXTCLOUD_ADMIN_PASSWORD=$rootpasswd nextcloud"
+
+			docker_rum() {
+
+				docker run -d --name nextcloud --restart=always -p ${docker_port}:80 -v /home/docker/nextcloud:/var/www/html -e NEXTCLOUD_ADMIN_USER=nextcloud -e NEXTCLOUD_ADMIN_PASSWORD=$rootpasswd nextcloud
+
+			}
+
 			local docker_describe="Nextcloud拥有超过 400,000 个部署，是您可以下载的最受欢迎的本地内容协作平台"
 			local docker_url="官网介绍: https://nextcloud.com/"
 			local docker_use="echo \"账号: nextcloud  密码: $rootpasswd\""
@@ -8625,7 +9253,13 @@ linux_panel() {
 			local docker_name="qd"
 			local docker_img="qdtoday/qd:latest"
 			local docker_port=8923
-			local docker_rum="docker run -d --name qd -p 8923:80 -v /home/docker/qd/config:/usr/src/app/config qdtoday/qd"
+
+			docker_rum() {
+
+				docker run -d --name qd -p ${docker_port}:80 -v /home/docker/qd/config:/usr/src/app/config qdtoday/qd
+
+			}
+
 			local docker_describe="QD-Today是一个HTTP请求定时任务自动执行框架"
 			local docker_url="官网介绍: https://qd-today.github.io/qd/zh_CN/"
 			local docker_use=""
@@ -8637,7 +9271,13 @@ linux_panel() {
 			local docker_name="dockge"
 			local docker_img="louislam/dockge:latest"
 			local docker_port=5003
-			local docker_rum="docker run -d --name dockge --restart unless-stopped -p 5003:5001 -v /var/run/docker.sock:/var/run/docker.sock -v /home/docker/dockge/data:/app/data -v  /home/docker/dockge/stacks:/home/docker/dockge/stacks -e DOCKGE_STACKS_DIR=/home/docker/dockge/stacks louislam/dockge"
+
+			docker_rum() {
+
+				docker run -d --name dockge --restart unless-stopped -p ${docker_port}:5001 -v /var/run/docker.sock:/var/run/docker.sock -v /home/docker/dockge/data:/app/data -v  /home/docker/dockge/stacks:/home/docker/dockge/stacks -e DOCKGE_STACKS_DIR=/home/docker/dockge/stacks louislam/dockge
+
+			}
+
 			local docker_describe="dockge是一个可视化的docker-compose容器管理面板"
 			local docker_url="官网介绍: ${gh_proxy}github.com/louislam/dockge"
 			local docker_use=""
@@ -8650,7 +9290,13 @@ linux_panel() {
 			local docker_name="speedtest"
 			local docker_img="ghcr.io/librespeed/speedtest"
 			local docker_port=8028
-			local docker_rum="docker run -d -p 8028:8080 --name speedtest --restart always ghcr.io/librespeed/speedtest"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:8080 --name speedtest --restart always ghcr.io/librespeed/speedtest
+
+			}
+
 			local docker_describe="librespeed是用Javascript实现的轻量级速度测试工具，即开即用"
 			local docker_url="官网介绍: ${gh_proxy}github.com/librespeed/speedtest"
 			local docker_use=""
@@ -8661,16 +9307,20 @@ linux_panel() {
 
 		  29)
 			local docker_name="searxng"
-			local docker_img="alandoyle/searxng:latest"
-			local docker_port=8700
-			local docker_rum="docker run --name=searxng \
-							-d --init \
-							--restart=unless-stopped \
-							-v /home/docker/searxng/config:/etc/searxng \
-							-v /home/docker/searxng/templates:/usr/local/searxng/searx/templates/simple \
-							-v /home/docker/searxng/theme:/usr/local/searxng/searx/static/themes/simple \
-							-p 8700:8080/tcp \
-							alandoyle/searxng:latest"
+			local docker_img="searxng/searxng"
+			local docker_port=8029
+
+			docker_rum() {
+
+				docker run -d \
+				  --name searxng \
+				  --restart unless-stopped \
+				  -p ${docker_port}:8080 \
+				  -v "/home/docker/searxng:/etc/searxng" \
+				  searxng/searxng
+
+			}
+
 			local docker_describe="searxng是一个私有且隐私的搜索引擎站点"
 			local docker_url="官网介绍: https://hub.docker.com/r/alandoyle/searxng"
 			local docker_use=""
@@ -8684,17 +9334,24 @@ linux_panel() {
 			local docker_img="photoprism/photoprism:latest"
 			local docker_port=2342
 			local rootpasswd=$(< /dev/urandom tr -dc _A-Z-a-z-0-9 | head -c16)
-			local docker_rum="docker run -d \
-							--name photoprism \
-							--restart always \
-							--security-opt seccomp=unconfined \
-							--security-opt apparmor=unconfined \
-							-p 2342:2342 \
-							-e PHOTOPRISM_UPLOAD_NSFW="true" \
-							-e PHOTOPRISM_ADMIN_PASSWORD="$rootpasswd" \
-							-v /home/docker/photoprism/storage:/photoprism/storage \
-							-v /home/docker/photoprism/Pictures:/photoprism/originals \
-							photoprism/photoprism"
+
+			docker_rum() {
+
+				docker run -d \
+					--name photoprism \
+					--restart always \
+					--security-opt seccomp=unconfined \
+					--security-opt apparmor=unconfined \
+					-p ${docker_port}:2342 \
+					-e PHOTOPRISM_UPLOAD_NSFW="true" \
+					-e PHOTOPRISM_ADMIN_PASSWORD="$rootpasswd" \
+					-v /home/docker/photoprism/storage:/photoprism/storage \
+					-v /home/docker/photoprism/Pictures:/photoprism/originals \
+					photoprism/photoprism
+
+			}
+
+
 			local docker_describe="photoprism非常强大的私有相册系统"
 			local docker_url="官网介绍: https://www.photoprism.app/"
 			local docker_use="echo \"账号: admin  密码: $rootpasswd\""
@@ -8708,15 +9365,20 @@ linux_panel() {
 			local docker_name="s-pdf"
 			local docker_img="frooodle/s-pdf:latest"
 			local docker_port=8020
-			local docker_rum="docker run -d \
-							--name s-pdf \
-							--restart=always \
-							 -p 8020:8080 \
-							 -v /home/docker/s-pdf/trainingData:/usr/share/tesseract-ocr/5/tessdata \
-							 -v /home/docker/s-pdf/extraConfigs:/configs \
-							 -v /home/docker/s-pdf/logs:/logs \
-							 -e DOCKER_ENABLE_SECURITY=false \
-							 frooodle/s-pdf:latest"
+
+			docker_rum() {
+
+				docker run -d \
+					--name s-pdf \
+					--restart=always \
+					 -p ${docker_port}:8080 \
+					 -v /home/docker/s-pdf/trainingData:/usr/share/tesseract-ocr/5/tessdata \
+					 -v /home/docker/s-pdf/extraConfigs:/configs \
+					 -v /home/docker/s-pdf/logs:/logs \
+					 -e DOCKER_ENABLE_SECURITY=false \
+					 frooodle/s-pdf:latest
+			}
+
 			local docker_describe="这是一个强大的本地托管基于 Web 的 PDF 操作工具，使用 docker，允许您对 PDF 文件执行各种操作，例如拆分合并、转换、重新组织、添加图像、旋转、压缩等。"
 			local docker_url="官网介绍: ${gh_proxy}github.com/Stirling-Tools/Stirling-PDF"
 			local docker_use=""
@@ -8729,7 +9391,14 @@ linux_panel() {
 			local docker_name="drawio"
 			local docker_img="jgraph/drawio"
 			local docker_port=7080
-			local docker_rum="docker run -d --restart=always --name drawio -p 7080:8080 -v /home/docker/drawio:/var/lib/drawio jgraph/drawio"
+
+			docker_rum() {
+
+				docker run -d --restart=always --name drawio -p ${docker_port}:8080 -v /home/docker/drawio:/var/lib/drawio jgraph/drawio
+
+			}
+
+
 			local docker_describe="这是一个强大图表绘制软件。思维导图，拓扑图，流程图，都能画"
 			local docker_url="官网介绍: https://www.drawio.com/"
 			local docker_use=""
@@ -8742,12 +9411,18 @@ linux_panel() {
 			local docker_name="sun-panel"
 			local docker_img="hslr/sun-panel"
 			local docker_port=3009
-			local docker_rum="docker run -d --restart=always -p 3009:3002 \
-							-v /home/docker/sun-panel/conf:/app/conf \
-							-v /home/docker/sun-panel/uploads:/app/uploads \
-							-v /home/docker/sun-panel/database:/app/database \
-							--name sun-panel \
-							hslr/sun-panel"
+
+			docker_rum() {
+
+				docker run -d --restart=always -p ${docker_port}:3002 \
+					-v /home/docker/sun-panel/conf:/app/conf \
+					-v /home/docker/sun-panel/uploads:/app/uploads \
+					-v /home/docker/sun-panel/database:/app/database \
+					--name sun-panel \
+					hslr/sun-panel
+
+			}
+
 			local docker_describe="Sun-Panel服务器、NAS导航面板、Homepage、浏览器首页"
 			local docker_url="官网介绍: https://doc.sun-panel.top/zh_cn/"
 			local docker_use="echo \"账号: admin@sun.cc  密码: 12345678\""
@@ -8760,12 +9435,17 @@ linux_panel() {
 			local docker_name="pingvin-share"
 			local docker_img="stonith404/pingvin-share"
 			local docker_port=3060
-			local docker_rum="docker run -d \
-							--name pingvin-share \
-							--restart always \
-							-p 3060:3000 \
-							-v /home/docker/pingvin-share/data:/opt/app/backend/data \
-							stonith404/pingvin-share"
+
+			docker_rum() {
+
+				docker run -d \
+					--name pingvin-share \
+					--restart always \
+					-p ${docker_port}:3000 \
+					-v /home/docker/pingvin-share/data:/opt/app/backend/data \
+					stonith404/pingvin-share
+			}
+
 			local docker_describe="Pingvin Share 是一个可自建的文件分享平台，是 WeTransfer 的一个替代品"
 			local docker_url="官网介绍: ${gh_proxy}github.com/stonith404/pingvin-share"
 			local docker_use=""
@@ -8779,13 +9459,19 @@ linux_panel() {
 			local docker_name="moments"
 			local docker_img="kingwrcy/moments:latest"
 			local docker_port=8035
-			local docker_rum="docker run -d --restart unless-stopped \
-							-p 8035:3000 \
-							-v /home/docker/moments/data:/app/data \
-							-v /etc/localtime:/etc/localtime:ro \
-							-v /etc/timezone:/etc/timezone:ro \
-							--name moments \
-							kingwrcy/moments:latest"
+
+			docker_rum() {
+
+				docker run -d --restart unless-stopped \
+					-p ${docker_port}:3000 \
+					-v /home/docker/moments/data:/app/data \
+					-v /etc/localtime:/etc/localtime:ro \
+					-v /etc/timezone:/etc/timezone:ro \
+					--name moments \
+					kingwrcy/moments:latest
+			}
+
+
 			local docker_describe="极简朋友圈，高仿微信朋友圈，记录你的美好生活"
 			local docker_url="官网介绍: ${gh_proxy}github.com/kingwrcy/moments?tab=readme-ov-file"
 			local docker_use="echo \"账号: admin  密码: a123456\""
@@ -8800,10 +9486,15 @@ linux_panel() {
 			local docker_name="lobe-chat"
 			local docker_img="lobehub/lobe-chat:latest"
 			local docker_port=8036
-			local docker_rum="docker run -d -p 8036:3210 \
-							--name lobe-chat \
-							--restart=always \
-							lobehub/lobe-chat"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:3210 \
+					--name lobe-chat \
+					--restart=always \
+					lobehub/lobe-chat
+			}
+
 			local docker_describe="LobeChat聚合市面上主流的AI大模型，ChatGPT/Claude/Gemini/Groq/Ollama"
 			local docker_url="官网介绍: ${gh_proxy}github.com/lobehub/lobe-chat"
 			local docker_use=""
@@ -8814,9 +9505,16 @@ linux_panel() {
 
 		  37)
 			local docker_name="myip"
-			local docker_img="ghcr.io/jason5ng32/myip:latest"
+			local docker_img="jason5ng32/myip:latest"
 			local docker_port=8037
-			local docker_rum="docker run -d -p 8037:18966 --name myip --restart always ghcr.io/jason5ng32/myip:latest"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:18966 --name myip jason5ng32/myip:latest
+
+			}
+
+
 			local docker_describe="是一个多功能IP工具箱，可以查看自己IP信息及连通性，用网页面板呈现"
 			local docker_url="官网介绍: ${gh_proxy}github.com/jason5ng32/MyIP/blob/main/README_ZH.md"
 			local docker_use=""
@@ -8843,7 +9541,13 @@ linux_panel() {
 			local docker_name="bililive-go"
 			local docker_img="chigusa/bililive-go"
 			local docker_port=8039
-			local docker_rum="docker run --restart=always --name bililive-go -v /home/docker/bililive-go/config.yml:/etc/bililive-go/config.yml -v /home/docker/bililive-go/Videos:/srv/bililive -p 8039:8080 -d chigusa/bililive-go"
+
+			docker_rum() {
+
+				docker run --restart=always --name bililive-go -v /home/docker/bililive-go/config.yml:/etc/bililive-go/config.yml -v /home/docker/bililive-go/Videos:/srv/bililive -p ${docker_port}:8080 -d chigusa/bililive-go
+
+			}
+
 			local docker_describe="Bililive-go是一个支持多种直播平台的直播录制工具"
 			local docker_url="官网介绍: ${gh_proxy}github.com/hr3lxphr6j/bililive-go"
 			local docker_use=""
@@ -8856,7 +9560,10 @@ linux_panel() {
 			local docker_name="webssh"
 			local docker_img="jrohy/webssh"
 			local docker_port=8040
-			local docker_rum="docker run -d -p 8040:5032 --restart always --name webssh -e TZ=Asia/Shanghai jrohy/webssh"
+			docker_rum() {
+				docker run -d -p ${docker_port}:5032 --restart always --name webssh -e TZ=Asia/Shanghai jrohy/webssh
+			}
+
 			local docker_describe="简易在线ssh连接工具和sftp工具"
 			local docker_url="官网介绍: ${gh_proxy}github.com/Jrohy/webssh"
 			local docker_use=""
@@ -8894,12 +9601,18 @@ linux_panel() {
 			local docker_name="nexterm"
 			local docker_img="germannewsmaker/nexterm:latest"
 			local docker_port=8042
-			local docker_rum="docker run -d \
-						  --name nexterm \
-						  -p 8042:6989 \
-						  -v /home/docker/nexterm:/app/data \
-						  --restart unless-stopped \
-						  germannewsmaker/nexterm:latest"
+
+			docker_rum() {
+
+				docker run -d \
+				  --name nexterm \
+				  -p ${docker_port}:6989 \
+				  -v /home/docker/nexterm:/app/data \
+				  --restart unless-stopped \
+				  germannewsmaker/nexterm:latest
+
+			}
+
 			local docker_describe="nexterm是一款强大的在线SSH/VNC/RDP连接工具。"
 			local docker_url="官网介绍: ${gh_proxy}github.com/gnmyt/Nexterm"
 			local docker_use=""
@@ -8911,8 +9624,15 @@ linux_panel() {
 		  43)
 			local docker_name="hbbs"
 			local docker_img="rustdesk/rustdesk-server"
-			local docker_port=21116
-			local docker_rum="docker run --name hbbs -v /home/docker/hbbs/data:/root -td --net=host --restart unless-stopped rustdesk/rustdesk-server hbbs"
+			local docker_port=0000
+
+			docker_rum() {
+
+				docker run --name hbbs -v /home/docker/hbbs/data:/root -td --net=host --restart unless-stopped rustdesk/rustdesk-server hbbs
+
+			}
+
+
 			local docker_describe="rustdesk开源的远程桌面(服务端)，类似自己的向日葵私服。"
 			local docker_url="官网介绍: https://rustdesk.com/zh-cn/"
 			local docker_use="docker logs hbbs"
@@ -8924,8 +9644,14 @@ linux_panel() {
 		  44)
 			local docker_name="hbbr"
 			local docker_img="rustdesk/rustdesk-server"
-			local docker_port=21116
-			local docker_rum="docker run --name hbbr -v /home/docker/hbbr/data:/root -td --net=host --restart unless-stopped rustdesk/rustdesk-server hbbr"
+			local docker_port=0000
+
+			docker_rum() {
+
+				docker run --name hbbr -v /home/docker/hbbr/data:/root -td --net=host --restart unless-stopped rustdesk/rustdesk-server hbbr
+
+			}
+
 			local docker_describe="rustdesk开源的远程桌面(中继端)，类似自己的向日葵私服。"
 			local docker_url="官网介绍: https://rustdesk.com/zh-cn/"
 			local docker_use="echo \"前往官网下载远程桌面的客户端: https://rustdesk.com/zh-cn/\""
@@ -8938,13 +9664,19 @@ linux_panel() {
 			local docker_name="registry"
 			local docker_img="registry:2"
 			local docker_port=8045
-			local docker_rum="docker run -d \
-							-p 8045:5000 \
-							--name registry \
-							-v /home/docker/registry:/var/lib/registry \
-							-e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io \
-							--restart always \
-							registry:2"
+
+			docker_rum() {
+
+				docker run -d \
+					-p ${docker_port}:5000 \
+					--name registry \
+					-v /home/docker/registry:/var/lib/registry \
+					-e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io \
+					--restart always \
+					registry:2
+
+			}
+
 			local docker_describe="Docker Registry 是一个用于存储和分发 Docker 镜像的服务。"
 			local docker_url="官网介绍: https://hub.docker.com/_/registry"
 			local docker_use=""
@@ -8957,7 +9689,13 @@ linux_panel() {
 			local docker_name="ghproxy"
 			local docker_img="wjqserver/ghproxy:latest"
 			local docker_port=8046
-			local docker_rum="docker run -d --name ghproxy --restart always -p 8046:8080 wjqserver/ghproxy:latest"
+
+			docker_rum() {
+
+				docker run -d --name ghproxy --restart always -p ${docker_port}:8080 wjqserver/ghproxy:latest
+
+			}
+
 			local docker_describe="使用Go实现的GHProxy，用于加速部分地区Github仓库的拉取。"
 			local docker_url="官网介绍: https://github.com/WJQSERVER-STUDIO/ghproxy"
 			local docker_use=""
@@ -9011,11 +9749,18 @@ linux_panel() {
 			local docker_name="node-exporter"
 			local docker_img="prom/node-exporter"
 			local docker_port=8048
-			local docker_rum="docker run -d \
-  								--name=node-exporter \
-  								-p 8048:9100 \
-  								--restart unless-stopped \
-  								prom/node-exporter"
+
+			docker_rum() {
+
+				docker run -d \
+  					--name=node-exporter \
+  					-p ${docker_port}:9100 \
+  					--restart unless-stopped \
+  					prom/node-exporter
+
+
+			}
+
 			local docker_describe="这是一个普罗米修斯的主机数据采集组件，请部署在被监控主机上。"
 			local docker_url="官网介绍: https://github.com/prometheus/node_exporter"
 			local docker_use=""
@@ -9028,17 +9773,23 @@ linux_panel() {
 			local docker_name="cadvisor"
 			local docker_img="gcr.io/cadvisor/cadvisor:latest"
 			local docker_port=8049
-			local docker_rum="docker run -d \
-  								--name=cadvisor \
-  								--restart unless-stopped \
-  								-p 8049:8080 \
-  								--volume=/:/rootfs:ro \
-  								--volume=/var/run:/var/run:rw \
-  								--volume=/sys:/sys:ro \
-  								--volume=/var/lib/docker/:/var/lib/docker:ro \
-  								gcr.io/cadvisor/cadvisor:latest \
-  								-housekeeping_interval=10s \
-  								-docker_only=true"
+
+			docker_rum() {
+
+				docker run -d \
+  					--name=cadvisor \
+  					--restart unless-stopped \
+  					-p ${docker_port}:8080 \
+  					--volume=/:/rootfs:ro \
+  					--volume=/var/run:/var/run:rw \
+  					--volume=/sys:/sys:ro \
+  					--volume=/var/lib/docker/:/var/lib/docker:ro \
+  					gcr.io/cadvisor/cadvisor:latest \
+  					-housekeeping_interval=10s \
+  					-docker_only=true
+
+			}
+
 			local docker_describe="这是一个普罗米修斯的容器数据采集组件，请部署在被监控主机上。"
 			local docker_url="官网介绍: https://github.com/google/cadvisor"
 			local docker_use=""
@@ -9052,9 +9803,15 @@ linux_panel() {
 			local docker_name="changedetection"
 			local docker_img="dgtlmoon/changedetection.io:latest"
 			local docker_port=8050
-			local docker_rum="docker run -d --restart always -p 8050:5000 \
-								-v /home/docker/datastore:/datastore \
-								--name changedetection dgtlmoon/changedetection.io:latest"
+
+			docker_rum() {
+
+				docker run -d --restart always -p ${docker_port}:5000 \
+					-v /home/docker/datastore:/datastore \
+					--name changedetection dgtlmoon/changedetection.io:latest
+
+			}
+
 			local docker_describe="这是一款网站变化检测、补货监控和通知的小工具"
 			local docker_url="官网介绍: https://github.com/dgtlmoon/changedetection.io"
 			local docker_use=""
@@ -9076,11 +9833,17 @@ linux_panel() {
 			local docker_name="dpanel"
 			local docker_img="dpanel/dpanel:lite"
 			local docker_port=8052
-			local docker_rum="docker run -it -d --name dpanel --restart=always \
-  								-p 8052:8080 -e APP_NAME=dpanel \
-  								-v /var/run/docker.sock:/var/run/docker.sock \
-  								-v /home/docker/dpanel:/dpanel \
-  								dpanel/dpanel:lite"
+
+			docker_rum() {
+
+				docker run -it -d --name dpanel --restart=always \
+  					-p ${docker_port}:8080 -e APP_NAME=dpanel \
+  					-v /var/run/docker.sock:/var/run/docker.sock \
+  					-v /home/docker/dpanel:/dpanel \
+  					dpanel/dpanel:lite
+
+			}
+
 			local docker_describe="Docker可视化面板系统，提供完善的docker管理功能。"
 			local docker_url="官网介绍: https://github.com/donknap/dpanel"
 			local docker_use=""
@@ -9093,7 +9856,13 @@ linux_panel() {
 			local docker_name="ollama"
 			local docker_img="ghcr.io/open-webui/open-webui:ollama"
 			local docker_port=8053
-			local docker_rum="docker run -d -p 8053:8080 -v /home/docker/ollama:/root/.ollama -v /home/docker/ollama/open-webui:/app/backend/data --name ollama --restart always ghcr.io/open-webui/open-webui:ollama"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:8080 -v /home/docker/ollama:/root/.ollama -v /home/docker/ollama/open-webui:/app/backend/data --name ollama --restart always ghcr.io/open-webui/open-webui:ollama
+
+			}
+
 			local docker_describe="OpenWebUI一款大语言模型网页框架，接入全新的llama3大语言模型"
 			local docker_url="官网介绍: https://github.com/open-webui/open-webui"
 			local docker_use="docker exec ollama ollama run llama3.2:1b"
@@ -9137,7 +9906,13 @@ linux_panel() {
 			local docker_name="ollama"
 			local docker_img="ghcr.io/open-webui/open-webui:ollama"
 			local docker_port=8053
-			local docker_rum="docker run -d -p 8053:8080 -v /home/docker/ollama:/root/.ollama -v /home/docker/ollama/open-webui:/app/backend/data --name ollama --restart always ghcr.io/open-webui/open-webui:ollama"
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:8080 -v /home/docker/ollama:/root/.ollama -v /home/docker/ollama/open-webui:/app/backend/data --name ollama --restart always ghcr.io/open-webui/open-webui:ollama
+
+			}
+
 			local docker_describe="OpenWebUI一款大语言模型网页框架，接入全新的DeepSeek R1大语言模型"
 			local docker_url="官网介绍: https://github.com/open-webui/open-webui"
 			local docker_use="docker exec ollama ollama run deepseek-r1:1.5b"
@@ -9151,14 +9926,16 @@ linux_panel() {
 			local app_name="Dify知识库"
 			local app_text="是一款开源的大语言模型(LLM) 应用开发平台。自托管训练数据用于AI生成"
 			local app_url="官方网站: https://docs.dify.ai/zh-hans"
-			local docker_name="docker-web-1"
+			local docker_name="docker-nginx-1"
 			local docker_port="8058"
 			local app_size="3"
 
 			docker_app_install() {
 				install git
 				mkdir -p  /home/docker/ && cd /home/docker/ && git clone ${gh_proxy}github.com/langgenius/dify.git && cd dify/docker && cp .env.example .env
-				sed -i 's/^EXPOSE_NGINX_PORT=.*/EXPOSE_NGINX_PORT=8058/; s/^EXPOSE_NGINX_SSL_PORT=.*/EXPOSE_NGINX_SSL_PORT=8858/' /home/docker/dify/docker/.env
+				# sed -i 's/^EXPOSE_NGINX_PORT=.*/EXPOSE_NGINX_PORT=${docker_port}/; s/^EXPOSE_NGINX_SSL_PORT=.*/EXPOSE_NGINX_SSL_PORT=8858/' /home/docker/dify/docker/.env
+				sed -i "s/^EXPOSE_NGINX_PORT=.*/EXPOSE_NGINX_PORT=${docker_port}/; s/^EXPOSE_NGINX_SSL_PORT=.*/EXPOSE_NGINX_SSL_PORT=8858/" /home/docker/dify/docker/.env
+
 				docker compose up -d
 				clear
 				echo "已经安装完成"
@@ -9194,9 +9971,12 @@ linux_panel() {
 			docker_app_install() {
 				install git
 				mkdir -p  /home/docker/ && cd /home/docker/ && git clone ${gh_proxy}github.com/Calcium-Ion/new-api.git && cd new-api
-				sed -i -e 's/- "3000:3000"/- "8059:3000"/g' \
+
+				sed -i -e "s/- \"3000:3000\"/- \"${docker_port}:3000\"/g" \
 					   -e 's/container_name: redis/container_name: redis-new-api/g' \
-					   -e 's/container_name: mysql/container_name: mysql-new-api/g' docker-compose.yml
+					   -e 's/container_name: mysql/container_name: mysql-new-api/g' \
+					   docker-compose.yml
+
 
 				docker compose up -d
 				clear
@@ -9208,9 +9988,11 @@ linux_panel() {
 				cd  /home/docker/new-api/ && docker compose down --rmi all
 				cd  /home/docker/new-api/
 				git pull origin main
-				sed -i -e 's/- "3000:3000"/- "8059:3000"/g' \
+				sed -i -e "s/- \"3000:3000\"/- \"${docker_port}:3000\"/g" \
 					   -e 's/container_name: redis/container_name: redis-new-api/g' \
-					   -e 's/container_name: mysql/container_name: mysql-new-api/g' docker-compose.yml
+					   -e 's/container_name: mysql/container_name: mysql-new-api/g' \
+					   docker-compose.yml
+
 				docker compose up -d
 				clear
 				echo "已经安装完成"
@@ -9271,11 +10053,17 @@ linux_panel() {
 			local docker_name="libretranslate"
 			local docker_img="libretranslate/libretranslate:latest"
 			local docker_port=8061
-			local docker_rum="docker run -d \
-  								-p 8061:5000 \
-  								--name libretranslate \
-  								libretranslate/libretranslate \
-  								--load-only ko,zt,zh,en,ja,pt,es,fr,de,ru"
+
+			docker_rum() {
+
+				docker run -d \
+  					-p ${docker_port}:5000 \
+  					--name libretranslate \
+  					libretranslate/libretranslate \
+  					--load-only ko,zt,zh,en,ja,pt,es,fr,de,ru
+
+			}
+
 			local docker_describe="免费开源机器翻译 API，完全自托管，它的翻译引擎由开源Argos Translate库提供支持。"
 			local docker_url="官网介绍: https://github.com/LibreTranslate/LibreTranslate"
 			local docker_use=""
@@ -9297,7 +10085,7 @@ linux_panel() {
 			docker_app_install() {
 				install git
 				mkdir -p  /home/docker/ && cd /home/docker/ && git clone ${gh_proxy}github.com/infiniflow/ragflow.git && cd ragflow/docker
-				sed -i 's/- 80:80/- 8062:80/; /- 443:443/d' docker-compose.yml
+				sed -i "s/- 80:80/- ${docker_port}:80/; /- 443:443/d" docker-compose.yml
 				docker compose up -d
 				clear
 				echo "已经安装完成"
@@ -9309,7 +10097,7 @@ linux_panel() {
 				cd  /home/docker/ragflow/
 				git pull origin main
 				cd  /home/docker/ragflow/docker/
-				sed -i 's/- 80:80/- 8062:80/; /- 443:443/d' docker-compose.yml
+				sed -i "s/- 80:80/- ${docker_port}:80/; /- 443:443/d" docker-compose.yml
 				docker compose up -d
 			}
 
@@ -9321,6 +10109,415 @@ linux_panel() {
 
 			docker_app_plus
 
+			  ;;
+
+
+		  63)
+			local docker_name="open-webui"
+			local docker_img="ghcr.io/open-webui/open-webui:main"
+			local docker_port=8063
+
+			docker_rum() {
+
+				docker run -d -p ${docker_port}:8080 -v /home/docker/open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+
+			}
+
+			local docker_describe="OpenWebUI一款大语言模型网页框架，官方精简版本，支持各大模型API接入"
+			local docker_url="官网介绍: https://github.com/open-webui/open-webui"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="3"
+			docker_app
+			  ;;
+
+		  64)
+			local docker_name="it-tools"
+			local docker_img="corentinth/it-tools:latest"
+			local docker_port=8064
+
+			docker_rum() {
+				docker run -d --name it-tools --restart unless-stopped -p ${docker_port}:80 corentinth/it-tools:latest
+			}
+
+			local docker_describe="对开发人员和 IT 工作者来说非常有用的工具"
+			local docker_url="官网介绍: https://github.com/CorentinTh/it-tools"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+
+		  65)
+			local docker_name="n8n"
+			local docker_img="docker.n8n.io/n8nio/n8n"
+			local docker_port=8065
+
+			docker_rum() {
+
+				add_yuming
+				mkdir -p /home/docker/n8n
+				chmod -R 777 /home/docker/n8n
+
+				docker run -d --name n8n \
+				  --restart always \
+				  -p ${docker_port}:5678 \
+				  -v /home/docker/n8n:/home/node/.n8n \
+				  -e N8N_HOST=${yuming} \
+				  -e N8N_PORT=5678 \
+				  -e N8N_PROTOCOL=https \
+				  -e N8N_WEBHOOK_URL=https://${yuming}/ \
+				  docker.n8n.io/n8nio/n8n
+
+				ldnmp_Proxy ${yuming} 127.0.0.1 ${docker_port}
+				block_container_port "$docker_name" "$ipv4_address"
+
+			}
+
+			local docker_describe="是一款功能强大的自动化工作流平台"
+			local docker_url="官网介绍: https://github.com/n8n-io/n8n"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+		  66)
+			yt_menu_pro
+			  ;;
+
+
+		  67)
+			local docker_name="ddns-go"
+			local docker_img="jeessy/ddns-go"
+			local docker_port=8067
+
+			docker_rum() {
+				docker run -d \
+					--name ddns-go \
+					--restart=always \
+					-p ${docker_port}:9876 \
+					-v /home/docker/ddns-go:/root \
+					jeessy/ddns-go
+
+			}
+
+			local docker_describe="自动将你的公网 IP（IPv4/IPv6）实时更新到各大 DNS 服务商，实现动态域名解析。"
+			local docker_url="官网介绍: https://github.com/CorentinTh/it-tools"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+		  68)
+			local docker_name="allinssl"
+			local docker_img="allinssl/allinssl:latest"
+			local docker_port=8068
+
+			docker_rum() {
+				docker run -itd --name allinssl -p ${docker_port}:8888 -v /home/docker/allinssl/data:/www/allinssl/data -e ALLINSSL_USER=allinssl -e ALLINSSL_PWD=allinssldocker -e ALLINSSL_URL=allinssl allinssl/allinssl:latest
+			}
+
+			local docker_describe="开源免费的 SSL 证书自动化管理平台"
+			local docker_url="官网介绍: https://allinssl.com"
+			local docker_use="echo \"安全入口: /allinssl\""
+			local docker_passwd="echo \"用户名: allinssl  密码: allinssldocker\""
+			local app_size="1"
+			docker_app
+			  ;;
+
+
+		  69)
+			local docker_name="sftpgo"
+			local docker_img="drakkan/sftpgo:latest"
+			local docker_port=8069
+
+			docker_rum() {
+
+				mkdir -p /home/docker/sftpgo/data
+				mkdir -p /home/docker/sftpgo/config
+				chown -R 1000:1000 /home/docker/sftpgo
+
+				docker run -d \
+				  --name sftpgo \
+				  --restart=always \
+				  -p ${docker_port}:8080 \
+				  -p 22022:2022 \
+				  --mount type=bind,source=/home/docker/sftpgo/data,target=/srv/sftpgo \
+				  --mount type=bind,source=/home/docker/sftpgo/config,target=/var/lib/sftpgo \
+				  drakkan/sftpgo:latest
+
+			}
+
+			local docker_describe="开源免费随时随地SFTP FTP WebDAV 文件传输工具"
+			local docker_url="官网介绍: https://sftpgo.com/"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+
+		  70)
+			local docker_name="astrbot"
+			local docker_img="soulter/astrbot:latest"
+			local docker_port=8070
+
+			docker_rum() {
+
+				mkdir -p /home/docker/astrbot/data
+
+				sudo docker run -d \
+				  -p ${docker_port}:6185 \
+				  -p 6195:6195 \
+				  -p 6196:6196 \
+				  -p 6199:6199 \
+				  -p 11451:11451 \
+				  -v /home/docker/astrbot/data:/AstrBot/data \
+				  --restart unless-stopped \
+				  --name astrbot \
+				  soulter/astrbot:latest
+
+			}
+
+			local docker_describe="开源AI聊天机器人框架，支持微信，QQ，TG接入AI大模型"
+			local docker_url="官网介绍: https://astrbot.app/"
+			local docker_use="echo \"用户名: astrbot  密码: astrbot\""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+
+		  71)
+			local docker_name="navidrome"
+			local docker_img="deluan/navidrome:latest"
+			local docker_port=8071
+
+			docker_rum() {
+
+				docker run -d \
+				  --name navidrome \
+				  --restart=unless-stopped \
+				  --user $(id -u):$(id -g) \
+				  -v /home/docker/navidrome/music:/music \
+				  -v /home/docker/navidrome/data:/data \
+				  -p ${docker_port}:4533 \
+				  -e ND_LOGLEVEL=info \
+				  deluan/navidrome:latest
+
+			}
+
+			local docker_describe="是一个轻量、高性能的音乐流媒体服务器"
+			local docker_url="官网介绍: https://www.navidrome.org/"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+			  ;;
+
+
+		  72)
+
+			local docker_name="bitwarden"
+			local docker_img="vaultwarden/server"
+			local docker_port=8072
+
+			docker_rum() {
+
+				docker run -d \
+					--name bitwarden \
+					--restart always \
+					-p ${docker_port}:80 \
+					-v /home/docker/bitwarden/data:/data \
+					vaultwarden/server
+
+			}
+
+			local docker_describe="一个你可以控制数据的密码管理器"
+			local docker_url="官网介绍: https://bitwarden.com/"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+
+
+			  ;;
+
+
+
+		  73)
+
+			local docker_name="libretv"
+			local docker_img="bestzwei/libretv:latest"
+			local docker_port=8073
+
+			docker_rum() {
+
+				read -e -p "设置LibreTV的登录密码: " app_passwd
+
+				docker run -d \
+				  --name libretv \
+				  --restart unless-stopped \
+				  -p ${docker_port}:8080 \
+				  -e PASSWORD=${app_passwd} \
+				  bestzwei/libretv:latest
+
+			}
+
+			local docker_describe="免费在线视频搜索与观看平台"
+			local docker_url="官网介绍: https://github.com/LibreSpark/LibreTV"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+
+			  ;;
+
+
+		  74)
+
+			local docker_name="moontv"
+			local docker_img="ghcr.io/senshinya/moontv:latest"
+			local docker_port=8074
+
+			docker_rum() {
+
+				read -e -p "设置MoonTV的登录密码: " app_passwd
+
+					docker run -d \
+					  --name moontv \
+					  --restart unless-stopped \
+					  -p ${docker_port}:3000 \
+					  -e PASSWORD=${app_passwd} \
+					  ghcr.io/senshinya/moontv:latest
+
+			}
+
+			local docker_describe="免费在线视频搜索与观看平台"
+			local docker_url="官网介绍: https://github.com/senshinya/MoonTV"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+
+			  ;;
+
+
+		  75)
+
+			local docker_name="melody"
+			local docker_img="foamzou/melody:latest"
+			local docker_port=8075
+
+			docker_rum() {
+
+				docker run -d \
+				  --name melody \
+				  --restart unless-stopped \
+				  -p ${docker_port}:5566 \
+				  -v /home/docker/melody/.profile:/app/backend/.profile \
+				  foamzou/melody:latest
+
+
+			}
+
+			local docker_describe="你的音乐精灵，旨在帮助你更好地管理音乐。"
+			local docker_url="官网介绍: https://github.com/foamzou/melody"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+
+
+			  ;;
+
+
+		  76)
+
+			local docker_name="dosgame"
+			local docker_img="oldiy/dosgame-web-docker:latest"
+			local docker_port=8076
+
+			docker_rum() {
+				docker run -d \
+  					--name dosgame \
+  					--restart unless-stopped \
+  					-p ${docker_port}:262 \
+  					oldiy/dosgame-web-docker:latest
+
+			}
+
+			local docker_describe="是一个中文DOS游戏合集网站"
+			local docker_url="官网介绍: https://github.com/rwv/chinese-dos-games"
+			local docker_use=""
+			local docker_passwd=""
+			local app_size="2"
+			docker_app
+
+
+			  ;;
+
+		  77)
+
+			local docker_name="xunlei"
+			local docker_img="cnk3x/xunlei"
+			local docker_port=8077
+
+			docker_rum() {
+
+				read -e -p "设置${docker_name}的登录用户名: " app_use
+				read -e -p "设置${docker_name}的登录密码: " app_passwd
+
+				docker run -d \
+				  --name xunlei \
+				  --restart unless-stopped \
+				  --privileged \
+				  -e XL_DASHBOARD_USERNAME=${app_use} \
+				  -e XL_DASHBOARD_PASSWORD=${app_passwd} \
+				  -v /home/docker/xunlei/data:/xunlei/data \
+				  -v /home/docker/xunlei/downloads:/xunlei/downloads \
+				  -p ${docker_port}:2345 \
+				  cnk3x/xunlei
+
+			}
+
+			local docker_describe="迅雷你的离线高速BT磁力下载工具"
+			local docker_url="官网介绍: https://github.com/cnk3x/xunlei"
+			local docker_use="echo \"手机登录迅雷，再输入邀请码，邀请码: 迅雷牛通\""
+			local docker_passwd=""
+			local app_size="1"
+			docker_app
+
+			  ;;
+
+
+
+		  78)
+
+			local app_name="PandaWiki"
+			local app_text="PandaWiki是一款AI大模型驱动的开源智能文档管理系统，强烈建议不要自定义端口部署。"
+			local app_url="官方介绍: https://github.com/chaitin/PandaWiki"
+			local docker_name="panda-wiki-nginx"
+			local docker_port="2443"
+			local app_size="2"
+
+			docker_app_install() {
+				bash -c "$(curl -fsSLk https://release.baizhi.cloud/panda-wiki/manager.sh)"
+			}
+
+			docker_app_update() {
+				docker_app_install
+			}
+
+
+			docker_app_uninstall() {
+				docker_app_install
+			}
+
+			docker_app_plus
 			  ;;
 
 
@@ -9343,8 +10540,8 @@ linux_work() {
 
 	while true; do
 	  clear
-	  send_stats "我的工作区"
-	  echo -e "我的工作区"
+	  send_stats "后台工作区"
+	  echo -e "后台工作区"
 	  echo -e "系统将为你提供可以后台常驻运行的工作区，你可以用来执行长时间的任务"
 	  echo -e "即使你断开SSH，工作区中的任务也不会中断，后台常驻任务。"
 	  echo -e "${gl_huang}提示: ${gl_bai}进入工作区后使用Ctrl+b再单独按d，退出工作区！"
@@ -10321,7 +11518,8 @@ EOF
 				echo "------------------------------------------------"
 				echo "当前流量使用情况，重启服务器流量计算会清零！"
 				output_status
-				echo "$output"
+				echo -e "${gl_kjlan}总接收: ${gl_bai}$rx"
+				echo -e "${gl_kjlan}总发送: ${gl_bai}$tx"
 
 				# 检查是否存在 Limiting_Shut_down.sh 文件
 				if [ -f ~/Limiting_Shut_down.sh ]; then
@@ -11152,9 +12350,11 @@ echo "------------------------"
 echo ""
 echo -e "科技lion周边"
 echo "------------------------"
-echo -e "${gl_kjlan}B站:   ${gl_bai}https://b23.tv/2mqnQyh              ${gl_kjlan}油管:     ${gl_bai}https://www.youtube.com/@kejilion${gl_bai}"
-echo -e "${gl_kjlan}官网:  ${gl_bai}https://kejilion.pro/               ${gl_kjlan}导航:     ${gl_bai}https://dh.kejilion.pro/${gl_bai}"
-echo -e "${gl_kjlan}博客:  ${gl_bai}https://blog.kejilion.pro/          ${gl_kjlan}软件中心: ${gl_bai}https://app.kejilion.pro/${gl_bai}"
+echo -e "${gl_kjlan}B站: ${gl_bai}https://b23.tv/2mqnQyh              ${gl_kjlan}油管: ${gl_bai}https://www.youtube.com/@kejilion${gl_bai}"
+echo -e "${gl_kjlan}官网: ${gl_bai}https://kejilion.pro/              ${gl_kjlan}导航: ${gl_bai}https://dh.kejilion.pro/${gl_bai}"
+echo -e "${gl_kjlan}博客: ${gl_bai}https://blog.kejilion.pro/         ${gl_kjlan}软件中心: ${gl_bai}https://app.kejilion.pro/${gl_bai}"
+echo "------------------------"
+echo -e "${gl_kjlan}脚本官网: ${gl_bai}https://kejilion.sh            ${gl_kjlan}GitHub地址: ${gl_bai}https://github.com/kejilion/sh${gl_bai}"
 echo "------------------------"
 echo ""
 }
@@ -11278,7 +12478,7 @@ echo -e "${gl_kjlan}8.   ${gl_bai}测试脚本合集"
 echo -e "${gl_kjlan}9.   ${gl_bai}甲骨文云脚本合集"
 echo -e "${gl_huang}10.  ${gl_bai}LDNMP建站"
 echo -e "${gl_kjlan}11.  ${gl_bai}应用市场"
-echo -e "${gl_kjlan}12.  ${gl_bai}我的工作区"
+echo -e "${gl_kjlan}12.  ${gl_bai}后台工作区"
 echo -e "${gl_kjlan}13.  ${gl_bai}系统工具"
 echo -e "${gl_kjlan}14.  ${gl_bai}服务器集群控制"
 echo -e "${gl_kjlan}15.  ${gl_bai}广告专栏"
@@ -11358,6 +12558,7 @@ echo "LDNMP站点管理       k web"
 echo "LDNMP缓存清理       k web cache"
 echo "安装WordPress       k wp |k wordpress |k wp xxx.com"
 echo "安装反向代理        k fd |k rp |k 反代 |k fd xxx.com"
+echo "安装负载均衡        k loadbalance |k 负载均衡"
 echo "防火墙面板          k fhq |k 防火墙"
 echo "开放端口            k dkdk 8080 |k 打开端口 8080"
 echo "关闭端口            k gbdk 7800 |k 关闭端口 7800"
@@ -11432,6 +12633,10 @@ else
 		fd|rp|反代)
 			shift
 			ldnmp_Proxy "$@"
+			;;
+
+		loadbalance|负载均衡)
+			ldnmp_Proxy_backend
 			;;
 
 		swap)
@@ -11552,12 +12757,17 @@ else
 		   shift
 			if [ "$1" = "cache" ]; then
 				web_cache
+			elif [ "$1" = "sec" ]; then
+				web_security
+			elif [ "$1" = "opt" ]; then
+				web_optimization
 			elif [ -z "$1" ]; then
 				ldnmp_web_status
 			else
 				k_info
 			fi
 			;;
+
 		*)
 			k_info
 			;;
