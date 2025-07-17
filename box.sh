@@ -6,7 +6,7 @@ BASE_URL="http://gh.cococ.co/https://raw.githubusercontent.com/ceocok/c.cococ/ma
 # 显示菜单中文名称
 declare -A script_names=(
   ["1"]="安装 Snell"
-  ["2"]="安装 V2Ray"
+  ["2"]="安装 Vmess"
   ["3"]="安装 Warp"
   ["4"]="安装 Hy2"
   ["5"]="安装 BBR"
@@ -28,7 +28,7 @@ declare -A script_names=(
 # 功能编号对应脚本名
 declare -A scripts=(
   ["1"]="Snell.sh"
-  ["2"]="v2ray.sh"
+  ["2"]="vmess-cdn.sh"
   ["3"]="warp.sh"
   ["4"]="hy.sh"
   ["5"]="bbr.sh"
