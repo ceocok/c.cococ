@@ -28,7 +28,7 @@ declare -A script_names=(
 # 功能编号对应脚本名
 declare -A scripts=(
   ["1"]="Snell.sh"
-  ["2"]="vmess-cdn.sh"
+  ["2"]="vmess.sh"
   ["3"]="warp.sh"
   ["4"]="hy.sh"
   ["5"]="bbr.sh"
