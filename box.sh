@@ -92,7 +92,6 @@ setup_shortcut() {
     # 使用 -sf 参数创建或覆盖符号链接
     ln -sf "$SCRIPT_PATH" /usr/local/bin/box
     echo "✅ 已创建/更新快捷命令：输入 box 可随时启动工具箱。"
-    echo "   快捷方式指向: $SCRIPT_PATH"
   fi
 }
 
