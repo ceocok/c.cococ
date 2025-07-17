@@ -1,6 +1,6 @@
 #!/bin/bash
 
-
+# 使用cf代理
 BASE_URL="http://gh.cococ.co/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
