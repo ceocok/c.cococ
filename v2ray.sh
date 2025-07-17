@@ -1,5 +1,5 @@
 #!/bin/bash
-# Author: Jrohy (修改优化：ChatGPT)
+# Author: Jrohy 
 # github: https://github.com/Jrohy/multi-v2ray
 
 begin_path=$(pwd)
@@ -92,7 +92,6 @@ installDependent(){
     if [[ ${package_manager} == 'dnf' || ${package_manager} == 'yum' ]];then
         ${package_manager} install socat crontabs bash-completion which python3 python3-pip -y
     else
-        ${package_manager} update -y
         ${package_manager} install socat cron bash-completion ntpdate gawk python3-full python3-venv -y
     fi
 }
@@ -180,3 +179,4 @@ main() {
 }
 
 main
+
