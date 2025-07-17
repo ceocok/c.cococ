@@ -272,11 +272,18 @@ issue_cert() {
     echo "➡️ 正在安装 acme.sh..."
     curl https://get.acme.sh | sh
   fi
+  # shellcheck source=/root/.acme.sh/acme.sh.env
   . ~/.acme.sh/acme.sh.env
 
-  echo "➡️ 正在注册 ACME 账户..."
-  ~/.acme.sh/acme.sh --register-account -m "myemail@${DOMAIN}"
+  # ---
+  # *** 关键修正 ***
+  # 必须先设置默认 CA 为 Let's Encrypt，然后再注册账户，否则会因无法连接默认的 ZeroSSL 而失败
+  # ---
+  echo "➡️ 正在设置默认 CA 为 Let's Encrypt 以提高兼容性..."
   ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+
+  echo "➡️ 正在基于 Let's Encrypt 注册 ACME 账户..."
+  ~/.acme.sh/acme.sh --register-account -m "myemail@${DOMAIN}"
 
   ACME_LISTEN_PARAM=""
   if curl -s -6 -m 10 "ifconfig.co" >/dev/null 2>&1; then
@@ -312,7 +319,11 @@ issue_cert() {
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now cronie >/dev/null 2>&1
   else
-    crond
+    # 对于非 systemd 系统，确保 crond 正在运行
+    # 不同系统的启动方式可能不同，这里是一个通用尝试
+    if ! pgrep -x "crond" > /dev/null; then
+        crond || (echo "Warning: could not start crond. Auto-renewal may not work." >&2)
+    fi
   fi
 }
 
