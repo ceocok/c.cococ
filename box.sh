@@ -84,13 +84,13 @@ check_v2ray() {
     echo "✅ 已检测到 V2Ray 已安装。"
     read -p "是否重新安装？[y/N]: " re
     if [[ "$re" =~ ^[Yy]$ ]]; then
-      run_script "v2ray.sh"
+      run_script "vmess.sh"
     else
       echo "✔️ 已跳过 V2Ray 安装。"
     fi
   else
     echo "🔍 未检测到 V2Ray，开始安装..."
-    run_script "v2ray.sh"
+    run_script "vmess.sh"
   fi
 }
 
