@@ -81,12 +81,21 @@ run_script() {
 
 # 设置 box 快捷命令
 setup_shortcut() {
-  if [ ! -f "/usr/local/bin/box" ]; then
-    cp "$(realpath "$0")" /usr/local/bin/box
-    chmod +x /usr/local/bin/box
-    echo "✅ 已创建快捷命令：输入 box 可随时启动工具箱。"
+  # realpath "$0" 获取当前脚本的绝对路径
+  # ln -s 创建一个符号链接
+  # -f (force) 选项确保如果链接已存在，会先删除旧的再创建新的，方便移动脚本位置后重新建立链接
+  local SCRIPT_PATH
+  SCRIPT_PATH="$(realpath "$0")"
+  
+  # 检查 /usr/local/bin/box 是否是正确的链接，如果不是或者不存在，则创建它
+  if [ ! -L "/usr/local/bin/box" ] || [ "$(readlink /usr/local/bin/box)" != "$SCRIPT_PATH" ]; then
+    # 使用 -sf 参数创建或覆盖符号链接
+    ln -sf "$SCRIPT_PATH" /usr/local/bin/box
+    echo "✅ 已创建/更新快捷命令：输入 box 可随时启动工具箱。"
+    echo "   快捷方式指向: $SCRIPT_PATH"
   fi
 }
+
 
 # 自我更新
 update_self() {
