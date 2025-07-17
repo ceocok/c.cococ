@@ -166,7 +166,7 @@ uninstall_for_reinstall() {
 # 完整卸载功能（菜单选项3），删除所有相关文件
 uninstall_xray() {
     yellow "⚠️ 警告：此操作将彻底删除 Xray 及其配置文件、证书和定时任务。"
-    echo -n "您确定要卸载 Xray 吗? [y/N]: "
+    echo -n "您确定要卸载 Xray 吗? [Y/N]: "
     read -r confirm_uninstall
     if [ "$confirm_uninstall" != "y" ] && [ "$confirm_uninstall" != "Y" ]; then
         echo "操作已取消。"
@@ -194,7 +194,7 @@ uninstall_xray() {
 
     green "✅ Xray 核心组件、证书及续期任务已删除。"
 
-    echo -n "❓ 是否要同时卸载 acme.sh 证书申请工具? (这将删除 /root/.acme.sh) [y/N]: "
+    echo -n "❓ 是否要同时卸载 acme.sh 证书申请工具? (这将删除 /root/.acme.sh) [Y/N]: "
     read -r confirm_acme
     if [ "$confirm_acme" = "y" ] || [ "$confirm_acme" = "Y" ]; then
         echo "➡️ 正在卸载 acme.sh..."
