@@ -173,7 +173,6 @@ function Install-EasyTier {
 function Create-DefaultConfig {
     if (-not (Test-Path $ConfigDir)) { New-Item -Path $ConfigDir -ItemType Directory -Force | Out-Null }
 $configContent = @"
-# === EasyTier 配置文件 (由脚本生成) ===
 ipv4 = ""
 dhcp = false
 listeners = ["udp://0.0.0.0:11010", "tcp://0.0.0.0:11010", "wg://0.0.0.0:11011", "ws://0.0.0.0:11011/", "wss://0.0.0.0:11012/"]
