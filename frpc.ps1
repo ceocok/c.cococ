@@ -4,11 +4,11 @@
 .DESCRIPTION
     This custom-tailored script uses a proxy for all GitHub downloads and fetches nssm.exe directly
     from a user-provided URL. It properly uses NSSM to wrap frpc.exe as a robust, auto-restarting
-    Windows service, solving the "Error 1053" issue reliably.
+    Windows service. Includes defaults for common settings like server address, proxy name, local IP, and local port.
 .AUTHOR
     Generated based on a request.
 .VERSION
-    5.0 (Custom Proxy & Direct NSSM Download)
+    5.2 (Interactive LocalIP with Default)
 .USAGE
     To run interactively from web:
     powershell -ExecutionPolicy Bypass -Command "iex ((New-Object System.Net.WebClient).DownloadString('https://gh.cococ.co/https://raw.githubusercontent.com/ceocok/c.cococ/refs/heads/main/frpc.ps1'))"
@@ -109,11 +109,29 @@ function Install-FrpcService {
 
     # --- Configure frpc.toml ---
     Write-Host "`n--- Configuring frpc.toml ---" -ForegroundColor Yellow
-    $serverAddr = Read-Host "Enter your frps server address (e.g., frp.example.com)"
-    $proxyName = Read-Host "Enter a name for this proxy (e.g., my_rdp)"
+
+    # Server Address with default
+    $serverAddrInput = Read-Host "Enter your frps server address [default: 118.31.43.162]"
+    $serverAddr = if ([string]::IsNullOrWhiteSpace($serverAddrInput)) { "118.31.43.162" } else { $serverAddrInput }
+
+    # Proxy Name with dynamic default
+    $defaultProxyName = "frpc$(Get-Date -Format 'MMddHHmm')"
+    $proxyNameInput = Read-Host "Enter a name for this proxy [default: $defaultProxyName]"
+    $proxyName = if ([string]::IsNullOrWhiteSpace($proxyNameInput)) { $defaultProxyName } else { $proxyNameInput }
+
+    # Proxy Type with default
     $proxyType = Read-Host "Enter proxy type (tcp/udp/http/https) [default: tcp]"
     if ([string]::IsNullOrWhiteSpace($proxyType)) { $proxyType = "tcp" }
-    $localPort = Read-Host "Enter the local port to forward (e.g., 3389 for RDP)"
+
+    # <<< NEW: Local IP with default >>>
+    $localIpInput = Read-Host "Enter the local IP to forward [default: 127.0.0.1]"
+    $localIp = if ([string]::IsNullOrWhiteSpace($localIpInput)) { "127.0.0.1" } else { $localIpInput }
+
+    # Local Port with default
+    $localPortInput = Read-Host "Enter the local port to forward (e.g., 3389 for RDP) [default: 3389]"
+    $localPort = if ([string]::IsNullOrWhiteSpace($localPortInput)) { "3389" } else { $localPortInput }
+    
+    # Remote Port (no default, must be specified)
     $remotePort = Read-Host "Enter the remote port on the server"
     
     $configContent = @"
@@ -124,12 +142,12 @@ serverPort = 7000
 [[proxies]]
 name = "$proxyName"
 type = "$proxyType"
-localIP = "127.0.0.1"
+localIP = "$localIp"
 localPort = $localPort
 remotePort = $remotePort
 "@
     $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllLines($CONFIG_FILE, $configContent, $utf8NoBomEncoding)
+    [System.IO.File]::WriteAllLines($CONFIG_FILE, $configContent, $utf8NoBomEncoding)
 
     Write-Host "Configuration file created at $CONFIG_FILE" -ForegroundColor Green
 
@@ -248,7 +266,7 @@ function Show-FrpcLog {
 function Show-Menu {
     while ($true) {
         Clear-Host
-        Write-Styled-Header "FRP Client Manager (v5.0 - Custom Proxy)"
+        Write-Styled-Header "FRP Client Manager (v5.2 - Interactive Defaults)"
 
         Write-Host " [Installation]" -ForegroundColor Magenta
         Write-Host "   1. Install/Reinstall frpc Service (Recommended)" -ForegroundColor Green
