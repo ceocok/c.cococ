@@ -249,7 +249,6 @@ install_easytier() {
 }
 
 create_default_config() { mkdir -p "$CONFIG_DIR"; cat > "$CONFIG_FILE" << 'EOF'
-# === EasyTier 配置文件 (由脚本生成) ===
 ipv4 = ""
 dhcp = false
 listeners = ["udp://0.0.0.0:11010", "tcp://0.0.0.0:11010", "wg://0.0.0.0:11011", "ws://0.0.0.0:11011/", "wss://0.0.0.0:11012/", "tcp://[::]:11010", "udp://[::]:11010"]
