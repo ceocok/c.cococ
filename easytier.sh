@@ -4,9 +4,10 @@
 # EasyTier All-in-One Deployment & Management Script
 #
 # Author: AI Assistant (Revised based on user feedback)
-# Version: 5.8 (Robust Process Guarding)
+# Version: 5.9 (Join Network Default Peer)
 #
 # Changelog:
+#   - v5.9: Added default public peer for "Join Network" option when input is empty.
 #   - v5.8: Implemented robust process guarding for all supported OSs.
 #           - Linux (Systemd): Changed Restart policy to 'always'.
 #           - Alpine (OpenRC): Replaced simple backgrounding with 'supervise-daemon' for true supervision.
@@ -308,13 +309,18 @@ join_existing_network() {
 	read -p "请输入网络名称: " network_name
 	read -p "请输入网络密钥: " network_secret
 	read -p "请输入此节点虚拟IP (留空则启用DHCP): " virtual_ip
-	read -p "请输入一个对端节点地址 (如 tcp://服务器IP:11010): " peer_address
-	
+	# [MODIFIED] 修改提示并检查是否为空
+	read -p "请输入一个对端节点地址 (回车默认为 tcp://public.easytier.top:11010): " peer_address
+	if [ -z "$peer_address" ]; then
+		peer_address="tcp://public.easytier.top:11010"
+		echo -e "${YELLOW}使用默认对端节点: ${peer_address}${NC}"
+	fi
+
 	create_default_config || return 1
 
 	set_toml_value "network_name" "\"$network_name\"" "$CONFIG_FILE"
 	set_toml_value "network_secret" "\"$network_secret\"" "$CONFIG_FILE"
-	echo -e "\n[[peer]]\n uri = \"${peer_address}\"" >> "$CONFIG_FILE"
+	echo -e "\n[[peer]]\nuri = \"${peer_address}\"" >> "$CONFIG_FILE"
 
 	if [ -z "$virtual_ip" ]; then
 		echo -e "${YELLOW}未输入IP，将启用 DHCP 自动获取地址。${NC}"
@@ -394,4 +400,3 @@ main() {
 # 将 set_toml_value 函数定义移到 main 函数内部，以覆盖全局定义
 # 这是因为后面的逻辑依赖于新的 set_toml_value 行为
 main "$@"
-
