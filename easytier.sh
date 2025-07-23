@@ -4,9 +4,12 @@
 # EasyTier All-in-One Deployment & Management Script
 #
 # Author: AI Assistant (Revised based on user feedback)
-# Version: 5.9 (Join Network Default Peer)
+# Version: 6.0 (Auto-Enable Service on Deploy/Join)
 #
 # Changelog:
+#   - v6.0: Automatically enable service on first deploy/join.
+#           - Removed manual "enable autostart" step from initial setup workflow.
+#           - Updated user messages to reflect the automatic enabling.
 #   - v5.9: Added default public peer for "Join Network" option when input is empty.
 #   - v5.8: Implemented robust process guarding for all supported OSs.
 #           - Linux (Systemd): Changed Restart policy to 'always'.
@@ -101,7 +104,6 @@ set_toml_value() {
 
 # --- 平台相关的服务管理功能 ---
 
-# [MODIFIED] 这是修改后的核心函数，用于创建具有强大进程守护能力的服务文件
 create_service_file() {
     if [[ "$OS_TYPE" == "macos" || "$OS_TYPE" == "alpine" ]]; then
         touch "$LOG_FILE"
@@ -128,26 +130,16 @@ WantedBy=multi-user.target
 EOL
     elif [[ "$OS_TYPE" == "alpine" ]]; then
         # 使用 OpenRC 的 supervise-daemon 实现真正的进程守护
-        # supervise-daemon 会监控进程，并在其崩溃或被杀后自动重启
         cat > "${SERVICE_FILE}" << EOL
 #!/sbin/openrc-run
 description="EasyTier Service with Supervisor"
-
-# 使用 supervise-daemon 作为守护程序，这是 OpenRC 的标准守护方式
 supervisor=supervise-daemon
-
 command="${INSTALL_DIR}/${CORE_BINARY_NAME}"
 command_args="-c ${CONFIG_FILE}"
 command_user="root"
-
-# supervise-daemon 需要一个 pidfile 来管理进程
 pidfile="/var/run/${SERVICE_NAME}.pid"
-
-# 将日志重定向到文件
 output_log="${LOG_FILE}"
 error_log="${LOG_FILE}"
-
-# supervise-daemon 默认就会在进程退出时重启它，等同于 systemd 的 Restart=always
 depend() {
 	need net
 	after net
@@ -162,25 +154,18 @@ EOL
 <dict>
     <key>Label</key>
     <string>${SERVICE_LABEL}</string>
-   
     <key>ProgramArguments</key>
     <array>
         <string>${INSTALL_DIR}/${CORE_BINARY_NAME}</string>
         <string>-c</string>
         <string>${CONFIG_FILE}</string>
     </array>
-    
     <key>RunAtLoad</key>
     <true/>
-    
-    <!-- KeepAlive 设置为 true 是 macOS 上最强的守护策略 -->
-    <!-- 它会确保进程始终运行，无论因何种原因退出都会被立即重启 -->
     <key>KeepAlive</key>
     <true/>
-    
     <key>StandardOutPath</key>
     <string>${LOG_FILE}</string>
-    
     <key>StandardErrorPath</key>
     <string>${LOG_FILE}</string>
 </dict>
@@ -194,8 +179,8 @@ reload_service_daemon() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl daemon-
 start_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl start "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" start; elif [[ "$OS_TYPE" == "macos" ]]; then launchctl load "${SERVICE_FILE}" &>/dev/null; fi; }
 stop_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl stop "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" stop; elif [[ "$OS_TYPE" == "macos" ]]; then launchctl unload "${SERVICE_FILE}" &>/dev/null; fi; }
 restart_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl restart "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" restart; elif [[ "$OS_TYPE" == "macos" ]]; then stop_service; sleep 1; start_service; fi; }
-enable_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl enable "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-update add "${SERVICE_NAME}" default; elif [[ "$OS_TYPE" == "macos" ]]; then start_service; echo -e "${GREEN}服务已加载，并将在系统启动时运行。${NC}"; fi; }
-disable_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl disable "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-update del "${SERVICE_NAME}" default; elif [[ "$OS_TYPE" == "macos" ]]; then stop_service; echo -e "${YELLOW}服务已停止且已取消开机自启。要重新启用，请选择“设为开机自启”。${NC}"; fi; }
+enable_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl enable "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-update add "${SERVICE_NAME}" default; elif [[ "$OS_TYPE" == "macos" ]]; then start_service; fi; echo -e "${GREEN}服务已设为开机自启。${NC}"; }
+disable_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl disable "${SERVICE_NAME}"; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-update del "${SERVICE_NAME}" default; elif [[ "$OS_TYPE" == "macos" ]]; then stop_service; fi; echo -e "${YELLOW}服务已取消开机自启。${NC}"; }
 status_service() { if [[ "$OS_TYPE" == "linux" ]]; then systemctl status "${SERVICE_NAME}" --no-pager -l; elif [[ "$OS_TYPE" == "alpine" ]]; then rc-service "${SERVICE_NAME}" status; elif [[ "$OS_TYPE" == "macos" ]]; then if launchctl list | grep -q "${SERVICE_LABEL}"; then echo -e "${GREEN}EasyTier 服务 (${SERVICE_LABEL}) 正在运行。${NC}"; ps aux | grep "${CORE_BINARY_NAME}" | grep -v grep; else echo -e "${YELLOW}EasyTier 服务 (${SERVICE_LABEL}) 已停止。${NC}"; fi; fi; }
 log_service() { if [[ "$OS_TYPE" == "linux" ]]; then journalctl -u "${SERVICE_NAME}" -f --no-pager; elif [[ "$OS_TYPE" == "alpine" || "$OS_TYPE" == "macos" ]]; then echo "正在显示日志文件: ${LOG_FILE}"; tail -f "${LOG_FILE}"; fi; }
 
@@ -298,9 +283,13 @@ deploy_new_network() {
 
 	create_service_file
 	reload_service_daemon
-	echo -e "${YELLOW}正在应用配置并启动服务...${NC}"
+	
+	# [MODIFIED] 自动启用并重启服务
+	echo -e "${YELLOW}正在设置开机自启并启动服务...${NC}"
+	enable_service
 	restart_service
-	echo -e "${GREEN}--- 新网络部署并启动成功! ---${NC}"
+	echo -e "${GREEN}--- 新网络部署成功，服务已启动并设为开机自启! ---${NC}"
+	
 	sleep 2; status_service
 }
 
@@ -309,7 +298,6 @@ join_existing_network() {
 	read -p "请输入网络名称: " network_name
 	read -p "请输入网络密钥: " network_secret
 	read -p "请输入此节点虚拟IP (留空则启用DHCP): " virtual_ip
-	# [MODIFIED] 修改提示并检查是否为空
 	read -p "请输入一个对端节点地址 (回车默认为 tcp://public.easytier.top:11010): " peer_address
 	if [ -z "$peer_address" ]; then
 		peer_address="tcp://public.easytier.top:11010"
@@ -334,9 +322,13 @@ join_existing_network() {
 
 	create_service_file
 	reload_service_daemon
-	echo -e "${YELLOW}正在应用配置并重启服务...${NC}"
+
+	# [MODIFIED] 自动启用并重启服务
+	echo -e "${YELLOW}正在设置开机自启并启动服务...${NC}"
+	enable_service
 	restart_service
-	echo -e "${GREEN}--- 已加入网络并重启服务! ---${NC}"
+	echo -e "${GREEN}--- 已加入网络，服务已启动并设为开机自启! ---${NC}"
+
 	sleep 2; status_service
 }
 
@@ -348,10 +340,6 @@ uninstall_easytier() { read -p "警告: 此操作将停止服务并删除所有�
 # --- 主菜单 ---
 main() {
 	# 修复 set_toml_value 与旧版不兼容的问题
-	# 旧版: set_toml_value "key" "value" "file" -> key = "value"
-	# TOML v1.0 标准要求布尔值不能有引号，字符串必须有
-	# 新版: set_toml_value "key" "\"string_value\"" "file" -> key = "string_value"
-	#       set_toml_value "key" "true" "file" -> key = true
 	set_toml_value() {
 		sed -i.bak "s|^#* *${1} *=.*|${1} = ${2}|" "$3" && rm "${3}.bak"
 	}
@@ -398,5 +386,5 @@ main() {
 }
 
 # 将 set_toml_value 函数定义移到 main 函数内部，以覆盖全局定义
-# 这是因为后面的逻辑依赖于新的 set_toml_value 行为
 main "$@"
+
