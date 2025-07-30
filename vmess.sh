@@ -8,6 +8,7 @@ XRAY_VERSION="1.8.4"
 CERT_DIR="/root/coca"
 XRAY_BIN="/usr/local/bin/xray"
 SYSTEMD_FILE="/etc/systemd/system/xray.service"
+OPENRC_FILE="/etc/init.d/xray" # 新增：Alpine OpenRC 脚本路径
 CONFIG_FILE="/etc/xray/config.json"
 WS_PATH="/ws"
 
@@ -144,8 +145,10 @@ EOF
 
 # 停止 Xray
 stop_xray() {
-    if [ -f "$SYSTEMD_FILE" ]; then
+    if systemctl --version >/dev/null 2>&1; then
         systemctl stop xray || true
+    elif rc-service --version >/dev/null 2>&1; then # 新增: Alpine 停止方式
+        rc-service xray stop || true
     else
         pkill xray || true
     fi
@@ -158,6 +161,10 @@ uninstall_for_reinstall() {
   if [ -f "$SYSTEMD_FILE" ]; then
     systemctl disable xray >/dev/null 2>&1 || true
     rm -f "$SYSTEMD_FILE"
+  fi
+  if [ -f "$OPENRC_FILE" ]; then # 新增: Alpine 卸载服务
+    rc-update del xray default >/dev/null 2>&1 || true
+    rm -f "$OPENRC_FILE"
   fi
   rm -rf "$XRAY_BIN" /etc/xray
   green "✅ Xray 程序和配置已删除，证书和续期任务已保留。"
@@ -175,11 +182,18 @@ uninstall_xray() {
 
     echo "➡️ 正在停止并卸载 Xray..."
     stop_xray
+
     if [ -f "$SYSTEMD_FILE" ]; then
         echo "➡️ 正在禁用并删除 systemd 服务..."
         systemctl disable xray >/dev/null 2>&1 || true
         rm -f "$SYSTEMD_FILE"
         systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    if [ -f "$OPENRC_FILE" ]; then # 新增: Alpine 完全卸载
+        echo "➡️ 正在禁用并删除 OpenRC 服务..."
+        rc-update del xray default >/dev/null 2>&1 || true
+        rm -f "$OPENRC_FILE"
     fi
 
     echo "➡️ 正在删除 Xray 程序及配置目录..."
@@ -275,10 +289,6 @@ issue_cert() {
   # shellcheck source=/root/.acme.sh/acme.sh.env
   . ~/.acme.sh/acme.sh.env
 
-  # ---
-  # *** 关键修正 ***
-  # 必须先设置默认 CA 为 Let's Encrypt，然后再注册账户，否则会因无法连接默认的 ZeroSSL 而失败
-  # ---
   echo "➡️ 正在设置默认 CA 为 Let's Encrypt 以提高兼容性..."
   ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
@@ -309,7 +319,7 @@ issue_cert() {
     --ecc \
     --key-file "$CERT_DIR/${DOMAIN}.key" \
     --fullchain-file "$CERT_DIR/${DOMAIN}.cer" \
-    --reloadcmd "systemctl restart xray >/dev/null 2>&1 || pkill -f xray"
+    --reloadcmd "rc-service xray restart >/dev/null 2>&1 || systemctl restart xray >/dev/null 2>&1 || pkill -f xray"
   
   echo "➡️ 正在设置证书自动续期任务..."
   ensure_command "crontab"
@@ -318,12 +328,9 @@ issue_cert() {
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now cronie >/dev/null 2>&1
-  else
-    # 对于非 systemd 系统，确保 crond 正在运行
-    # 不同系统的启动方式可能不同，这里是一个通用尝试
-    if ! pgrep -x "crond" > /dev/null; then
-        crond || (echo "Warning: could not start crond. Auto-renewal may not work." >&2)
-    fi
+  elif command -v rc-update >/dev/null 2>&1; then # 新增: Alpine 启动 crond 服务
+    rc-update add crond default >/dev/null 2>&1
+    rc-service crond start >/dev/null 2>&1
   fi
 }
 
@@ -375,10 +382,15 @@ EOF
   green "✅ 配置文件已生成。"
 }
 
-# 创建并启动 systemd 服务
+# ***************************************************************
+# ***                      核心修改部分                       ***
+# ***************************************************************
+
+# 创建并启动 systemd/openrc/nohup 服务
 setup_and_start_xray() {
+  # 1. 检查是否为 systemd 系统
   if command -v systemctl >/dev/null 2>&1; then
-      echo "➡️ 正在创建并启动 systemd 服务..."
+      echo "➡️ 检测到 systemd，正在创建并启动 systemd 服务..."
       cat > "$SYSTEMD_FILE" <<EOF
 [Unit]
 Description=Xray Service
@@ -402,13 +414,42 @@ EOF
       systemctl start xray
       sleep 2
       if systemctl is-active --quiet xray; then
-          green "✅ Xray (systemd) 启动成功！"
+          green "✅ Xray (systemd) 启动并已设置为开机自启。"
       else
           red "❌ Xray (systemd) 启动失败，请运行 'journalctl -u xray --no-pager -l' 查看日志。"
           exit 1
       fi
+  # 2. 检查是否为 Alpine (OpenRC) 系统
+  elif command -v rc-update >/dev/null 2>&1; then
+      echo "➡️ 检测到 OpenRC (Alpine)，正在创建并启动 OpenRC 服务..."
+      # 创建 init 脚本
+      cat > "$OPENRC_FILE" <<EOF
+#!/sbin/openrc-run
+description="Xray Service"
+supervisor=supervise-daemon
+
+command="$XRAY_BIN"
+command_args="run -c $CONFIG_FILE"
+pidfile="/run/\${RC_SVCNAME}.pid"
+
+depend() {
+    need net
+    after net
+}
+EOF
+      chmod +x "$OPENRC_FILE"
+      rc-update add xray default # 添加到默认运行级别（实现开机自启）
+      rc-service xray start      # 启动服务
+      sleep 2
+      if rc-service -e xray; then
+          green "✅ Xray (OpenRC) 启动并已设置为开机自启。"
+      else
+          red "❌ Xray (OpenRC) 启动失败，请检查配置文件 '$CONFIG_FILE'。"
+          exit 1
+      fi
+  # 3. 回退到 nohup (无自启)
   else
-      echo "➡️ 正在使用 nohup 启动 Xray (非 systemd 系统)..."
+      yellow "⚠️ 未检测到 systemd 或 OpenRC，将使用 nohup 启动 (无法开机自启)。"
       nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
       sleep 2
       if pgrep -f "$XRAY_BIN" >/dev/null; then
