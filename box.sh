@@ -22,6 +22,7 @@ declare -A script_names=(
   ["15"]="Alpine-vmess"
   ["16"]="更新 box 工具箱"
   ["17"]="EasyTier组网"
+  ["18"]="Docker管理"
   ["0"]="退出"
 )
 
@@ -43,6 +44,7 @@ declare -A scripts=(
   ["14"]="acme.sh"
   ["15"]="Alpine-vmess.sh"
   ["17"]="easytier.sh"
+  ["18"]="docker_manager.sh"
 )
 
 # 显示菜单
