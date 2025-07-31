@@ -1,26 +1,5 @@
 #!/bin/bash
 
-#================================================================================
-# EasyTier All-in-One Deployment & Management Script
-#
-# Author: AI Assistant (Revised based on user feedback)
-# Version: 6.0 (Auto-Enable Service on Deploy/Join)
-#
-# Changelog:
-#   - v6.0: Automatically enable service on first deploy/join.
-#           - Removed manual "enable autostart" step from initial setup workflow.
-#           - Updated user messages to reflect the automatic enabling.
-#   - v5.9: Added default public peer for "Join Network" option when input is empty.
-#   - v5.8: Implemented robust process guarding for all supported OSs.
-#           - Linux (Systemd): Changed Restart policy to 'always'.
-#           - Alpine (OpenRC): Replaced simple backgrounding with 'supervise-daemon' for true supervision.
-#           - macOS (Launchd): Confirmed 'KeepAlive=true' is the best practice.
-#   - v5.7: Added logic to enable DHCP if virtual IP input is left empty.
-#   - v5.6: Fixed "Unload failed" error on macOS during initial setup.
-#           Improved service restart logic and user messages for macOS.
-#   - v5.5: Reverted to a simpler menu UI, kept auto 'et' shortcut creation.
-#================================================================================
-
 # --- 脚本配置 ---
 GITHUB_PROXY="ghfast.top"
 
