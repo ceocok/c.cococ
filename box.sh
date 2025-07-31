@@ -22,7 +22,7 @@ declare -A script_names=(
   ["15"]="Alpine-vmess"
   ["16"]="更新 box 工具箱"
   ["17"]="EasyTier组网"
-  ["18"]="Docker管理"
+  ["18"]="Docker迁移"
   ["0"]="退出"
 )
 
