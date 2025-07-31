@@ -16,7 +16,7 @@
 
 # --- 脚本配置 ---
 $GithubApiUrl = "https://api.github.com/repos/EasyTier/EasyTier/releases/latest"
-$GithubProxy = "gh.cococ.co" # 可选代理, 留空则不使用
+$GithubProxy = "ghfast.top" # 可选代理, 留空则不使用
 
 # --- 路径和名称定义 ---
 # 使用 Program Files 和 ProgramData 是 Windows 的标准做法
