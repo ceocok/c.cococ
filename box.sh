@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 使用cf代理
-BASE_URL="https://gh.cococ.co/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+BASE_URL="https://ghfast.top/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
 declare -A script_names=(
