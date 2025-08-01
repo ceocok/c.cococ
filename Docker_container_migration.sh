@@ -157,14 +157,24 @@ full_docker_backup() {
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
-        echo "echo -e \"\n $c 恢复中...\"; CID=\$($modified_cmd); if [ -n \"\$CID\" ]; then echo -e \"\033[0;32m$c 恢复成功\033[0m\"; else echo -e \"\033[0;31m$c 恢复失败\033[0m\"; exit 1; fi" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
+        echo "echo -e \"\n$c 恢复中...\"; CID=\$($modified_cmd); if [ -n \"\$CID\" ]; then echo -e \"\033[0;32m$c 恢复成功\033[0m\"; else echo -e \"\033[0;31m$c 恢复失败\033[0m\"; exit 1; fi" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
         docker inspect "$c" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' >> "${BACKUP_DIR}/volume_paths.txt.tmp"
     done
     sort -u "${BACKUP_DIR}/volume_paths.txt.tmp" > "${BACKUP_DIR}/volume_paths.txt"; rm "${BACKUP_DIR}/volume_paths.txt.tmp"
 
     echo -e "\n${GREEN}备份完成，执行打包程序... ${NC}"
     tar_opts=("-czf" "$ARCHIVE_NAME"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); else tar_opts+=("--absolute-names"); fi
-    sudo tar "${tar_opts[@]}" -C "${BACKUP_DIR}" "${RESTORE_SCRIPT}" -C / -T "${BACKUP_DIR}/volume_paths.txt" || { echo -e "${RED}打包失败!${NC}"; rm -rf "$BACKUP_DIR"; return 1; }
+    
+    # --- FIX START: 添加路径转换参数，打包时移除路径开头的斜杠 ---
+    local TRANSFORM_OPT=""
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        TRANSFORM_OPT="--transform=s,^/,,g"
+    else # macos
+        TRANSFORM_OPT="-s /^\///"
+    fi
+    sudo tar "${tar_opts[@]}" -C "${BACKUP_DIR}" "${RESTORE_SCRIPT}" -C / ${TRANSFORM_OPT} -T "${BACKUP_DIR}/volume_paths.txt" || { echo -e "${RED}打包失败!${NC}"; rm -rf "$BACKUP_DIR"; return 1; }
+    # --- FIX END ---
+    
     rm -rf "$BACKUP_DIR"
 
     setup_nginx_for_download || return 1
@@ -196,8 +206,12 @@ full_docker_restore() {
     
     echo -e "\n${GREEN}正在下载文件: $DL_URL${NC}"; wget -q --show-progress "$DL_URL" || { echo -e "${RED}下载失败!${NC}"; return 1; }
     echo -e "\n${GREEN}创建恢复目录并解压备份文件...${NC}"; mkdir "$RESTORE_DIR"
-    tar_opts=("-xzf" "$BAK_FILE" "-C" "${RESTORE_DIR}/"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); fi
+
+    # --- FIX START: 移除解压时不必要的-P参数，并简化命令 ---
+    # 由于打包时路径已变为相对路径，解压时不会再出现 "Removing leading '/'" 的提示。
+    local tar_opts=("-xzf" "$BAK_FILE" "-C" "${RESTORE_DIR}/")
     sudo tar "${tar_opts[@]}" || { echo -e "${RED}解压失败!${NC}"; rm -rf "$BAK_FILE" "$RESTORE_DIR"; return 1; }
+    # --- FIX END ---
 
     local SCRIPT_PATH=$(find "${RESTORE_DIR}" -name "restore_*.sh")
     if [ -z "$SCRIPT_PATH" ]; then
@@ -256,7 +270,16 @@ backup_container_volumes() {
 
     echo -e "\n${YELLOW}打包中...${NC}"
     tar_opts=("-czf" "$ARCHIVE_NAME"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); else tar_opts+=("--absolute-names"); fi
-    sudo tar "${tar_opts[@]}" -C / -T "$VOLUME_PATHS_FILE" || { echo -e "${RED}打包失败!${NC}"; rm "$VOLUME_PATHS_FILE"; return 1; }
+
+    # We can apply the same fix here for consistency, though it's less critical.
+    local TRANSFORM_OPT=""
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        TRANSFORM_OPT="--transform=s,^/,,g"
+    else # macos
+        TRANSFORM_OPT="-s /^\///"
+    fi
+    sudo tar "${tar_opts[@]}" -C / ${TRANSFORM_OPT} -T "$VOLUME_PATHS_FILE" || { echo -e "${RED}打包失败!${NC}"; rm "$VOLUME_PATHS_FILE"; return 1; }
+    
     rm "$VOLUME_PATHS_FILE"
     echo -e "\n${GREEN}--- ✅ 打包完成！ ---${NC}"; echo -e "备份文件位于: ${YELLOW}$(pwd)/${ARCHIVE_NAME}${NC}"
 
