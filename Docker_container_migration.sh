@@ -157,7 +157,7 @@ full_docker_backup() {
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
-        echo "echo -e \"\n--- 恢复: $c ---\"; CID=\$($modified_cmd); if [ -n \"\$CID\" ]; then echo -e \"\033[0;32m$c 恢复成功\033[0m\"; else echo -e \"\033[0;31m$c 恢复失败\033[0m\"; exit 1; fi" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
+        echo "echo -e \"\n $c 恢复中...\"; CID=\$($modified_cmd); if [ -n \"\$CID\" ]; then echo -e \"\033[0;32m$c 恢复成功\033[0m\"; else echo -e \"\033[0;31m$c 恢复失败\033[0m\"; exit 1; fi" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
         docker inspect "$c" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' >> "${BACKUP_DIR}/volume_paths.txt.tmp"
     done
     sort -u "${BACKUP_DIR}/volume_paths.txt.tmp" > "${BACKUP_DIR}/volume_paths.txt"; rm "${BACKUP_DIR}/volume_paths.txt.tmp"
