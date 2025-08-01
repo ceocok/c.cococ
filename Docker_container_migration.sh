@@ -153,7 +153,7 @@ full_docker_backup() {
     echo "MIGRATION_DIR=\$(cd \"\$(dirname \"\$0\")\" && pwd)" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
 
     for c in "${TARGET_CONTAINERS[@]}"; do
-        echo -e "\n${YELLOW}--- 备份并生成$c ---${NC}的安装命令"
+        echo -e "\n${YELLOW}--- 备份并生成$c的安装命令---${NC}"
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
@@ -172,7 +172,7 @@ full_docker_backup() {
     local server_ip=$(get_server_ip)
     echo -e "\n${GREEN}--- ✅  备份完成！ ---${NC}"
     echo -e "下载地址: ${YELLOW}http://${server_ip}:8889/${ARCHIVE_NAME}${NC}"
-    echo -e "在新服务器上恢复时，只需要输入 IP 地址 ${YELLOW}${server_ip}${NC} 即可下载备份容器。"
+    echo -e "在新服务器上恢复只需要输入 IP 地址 ${GREEN}${server_ip}${NC} 即可下载备份的容器。"
 }
 
 
@@ -209,7 +209,7 @@ full_docker_restore() {
     echo "为恢复脚本授权..."
     sudo chmod +x "$SCRIPT_PATH" || { echo -e "${RED}授权失败!${NC}"; rm -rf "$BAK_FILE" "$RESTORE_DIR"; return 1; }
 
-    echo -e "\n${YELLOW}即将执行恢复脚本...${NC}"; sleep 2
+    echo -e "\n${GREEN}即将执行恢复脚本...${NC}"; sleep 2
     if ! sudo "$SCRIPT_PATH"; then 
         echo -e "\n${RED}恢复脚本执行过程中发生错误。${NC}";
     else 
@@ -220,7 +220,7 @@ full_docker_restore() {
     # 使用 sudo 来清理 root 创建的目录
     echo "正在清理临时恢复目录..."
     sudo rm -rf "$RESTORE_DIR" 
-    echo -e "\n${YELLOW}--- 当前容器状态 ---${NC}"; docker ps
+    echo -e "\n${GREEN}--- 当前容器状态 ---${NC}"; docker ps
 }
 
 
@@ -279,9 +279,9 @@ main_menu() {
     echo -e "\n${Blue}=============================================${Font}"
     echo -e "        Docker 迁移与备份工具 v2.5"
     echo -e "${Blue}=============================================${Font}"
-    echo -e "  ${GREEN}1.${NC}  完整迁移: 备份容器 (源服务器执行)"
-    echo -e "  ${GREEN}2.${NC}  完整迁移: 恢复容器 (新服务器执行)"
-    echo -e "  ${GREEN}3.${NC}  仅备份数据卷 (本地备份)"
+    echo -e "  ${GREEN}1.${NC}  备份容器 (源服务器执行)"
+    echo -e "  ${GREEN}2.${NC}  恢复容器 (新服务器执行)"
+    echo -e "  ${GREEN}3.${NC}  备份数据 (仅备份于本地)"
     echo -e "  ${Blue}4.${NC}  清理 Nginx 临时配置"
     echo -e "  ${RED}5.${NC}  退出"
     echo -e "${Blue}=============================================${Font}"
@@ -291,7 +291,7 @@ main_menu() {
       2) full_docker_restore ;;
       3) backup_container_volumes ;;
       4) restore_nginx_config ;;
-      5) trap - INT TERM; restore_nginx_config; echo -e "${YELLOW}再见!${NC}"; exit 0 ;;
+      5) trap - INT TERM; restore_nginx_config; echo -e "${GREEN}脚本执行完毕!${NC}"; exit 0 ;;
       *) echo -e "${RED}无效选项。${NC}" >&2 ;;
     esac
   done
