@@ -162,7 +162,7 @@ full_docker_backup() {
     done
     sort -u "${BACKUP_DIR}/volume_paths.txt.tmp" > "${BACKUP_DIR}/volume_paths.txt"; rm "${BACKUP_DIR}/volume_paths.txt.tmp"
 
-    echo -e "\n${YELLOW}--- 开始打包... ---${NC}"
+    echo -e "\n${GREEN}--- 备份完成，执行打包程序... ---${NC}"
     tar_opts=("-czf" "$ARCHIVE_NAME"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); else tar_opts+=("--absolute-names"); fi
     sudo tar "${tar_opts[@]}" -C "${BACKUP_DIR}" "${RESTORE_SCRIPT}" -C / -T "${BACKUP_DIR}/volume_paths.txt" || { echo -e "${RED}打包失败!${NC}"; rm -rf "$BACKUP_DIR"; return 1; }
     rm -rf "$BACKUP_DIR"
