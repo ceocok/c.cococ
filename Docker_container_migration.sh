@@ -189,14 +189,13 @@ full_docker_restore() {
     local BAK_FILE="docker_migration_backup.tar.gz"
     local DL_URL="${BASE_URL}/${BAK_FILE}"
     
-    echo "正在尝试从 $DL_URL 查找并下载备份文件..."
+    echo  "正在尝试从 $DL_URL 查找并下载备份文件..."
     wget -q --spider "$DL_URL" || { echo -e "${RED}错误: 无法在源服务器上找到指定的备份文件 ($BAK_FILE)。\n请确认源服务器已成功执行备份。${NC}"; return 1; }
     
     local RESTORE_DIR="migration_temp_$$"
     
-    echo "正在下载文件: $DL_URL"; wget -q --show-progress "$DL_URL" || { echo -e "${RED}下载失败!${NC}"; return 1; }
-    echo "创建恢复目录: ${RESTORE_DIR}/"; mkdir "$RESTORE_DIR"
-    echo "解压缩备份文件...";
+    echo -e "\n${GREEN}正在下载文件: $DL_URL${NC}"; wget -q --show-progress "$DL_URL" || { echo -e "${RED}下载失败!${NC}"; return 1; }
+    echo -e "\n${GREEN}创建恢复目录并解压备份文件...${NC}"; mkdir "$RESTORE_DIR"
     tar_opts=("-xzf" "$BAK_FILE" "-C" "${RESTORE_DIR}/"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); fi
     sudo tar "${tar_opts[@]}" || { echo -e "${RED}解压失败!${NC}"; rm -rf "$BAK_FILE" "$RESTORE_DIR"; return 1; }
 
@@ -205,8 +204,6 @@ full_docker_restore() {
         echo -e "${RED}错误: 未在备份包中找到恢复脚本 (restore_*.sh)。${NC}"; rm -rf "$BAK_FILE" "$RESTORE_DIR"; return 1
     fi
     
-    # --- BUG 修正处 ---
-    echo "为恢复脚本授权..."
     sudo chmod +x "$SCRIPT_PATH" || { echo -e "${RED}授权失败!${NC}"; rm -rf "$BAK_FILE" "$RESTORE_DIR"; return 1; }
 
     echo -e "\n${GREEN}即将执行恢复脚本...${NC}"; sleep 2
@@ -291,7 +288,7 @@ main_menu() {
       2) full_docker_restore ;;
       3) backup_container_volumes ;;
       4) restore_nginx_config ;;
-      5) trap - INT TERM; restore_nginx_config; echo -e "${GREEN}脚本执行完毕!${NC}"; exit 0 ;;
+      5) trap - INT TERM; restore_nginx_config; echo -e "${GREEN}脚本执行完毕，NodeSeek见！${NC}"; exit 0 ;;
       *) echo -e "${RED}无效选项。${NC}" >&2 ;;
     esac
   done
