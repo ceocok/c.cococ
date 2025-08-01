@@ -80,7 +80,7 @@ setup_nginx_for_download() {
   if [[ "$OS_TYPE" == "linux" ]]; then conf_path="${NGINX_CONF_DIR}/sites-available/${NGINX_TEMP_CONF_NAME}";
   else mkdir -p "${NGINX_CONF_DIR}/servers"; conf_path="${NGINX_CONF_DIR}/servers/${NGINX_TEMP_CONF_NAME}"; fi
   if [ -f "$conf_path" ]; then echo -e "${GREEN}Nginx 临时下载服务器已配置。${NC}"; return 0; fi
-  echo -e "${YELLOW}正在配置 Nginx...${NC}"; sudo mkdir -p "${NGINX_WEB_ROOT}"
+  echo -e "${GREEN}打包完成，正在配置 Nginx...${NC}"; sudo mkdir -p "${NGINX_WEB_ROOT}"
   echo "server { listen 8889; server_name _; root ${NGINX_WEB_ROOT}; autoindex on; access_log off; }" | sudo tee "$conf_path" > /dev/null
   if [[ "$OS_TYPE" == "linux" ]]; then sudo ln -sf "$conf_path" "${NGINX_CONF_DIR}/sites-enabled/${NGINX_TEMP_CONF_NAME}" 2>/dev/null; fi
   echo "正在重载 Nginx..."; sudo nginx -t || { echo -e "${RED}Nginx 配置测试失败！${NC}"; sudo rm -f "$conf_path"; return 1; }
