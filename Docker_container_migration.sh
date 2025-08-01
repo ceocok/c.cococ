@@ -153,7 +153,7 @@ full_docker_backup() {
     echo "MIGRATION_DIR=\$(cd \"\$(dirname \"\$0\")\" && pwd)" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
 
     for c in "${TARGET_CONTAINERS[@]}"; do
-        echo -e "\n${YELLOW}--- 备份并生成$c的安装命令---${NC}"
+        echo -e "\n${GREEN}--- 备份数据卷并生成 $c 的安装命令---${NC}"
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
