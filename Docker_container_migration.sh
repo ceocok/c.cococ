@@ -199,12 +199,12 @@ full_docker_restore() {
     local BAK_FILE="docker_migration_backup.tar.gz"
     local DL_URL="${BASE_URL}/${BAK_FILE}"
     
-    echo  "正在尝试从 $DL_URL 查找并下载备份文件..."
+    echo  "正在尝试从源服务器查找备份文件..."
     wget -q --spider "$DL_URL" || { echo -e "${RED}错误: 无法在源服务器上找到指定的备份文件 ($BAK_FILE)。\n请确认源服务器已成功执行备份。${NC}"; return 1; }
     
     local RESTORE_DIR="migration_temp_$$"
     
-    echo -e "\n${GREEN}正在下载文件: $DL_URL${NC}"; wget -q --show-progress "$DL_URL" || { echo -e "${RED}下载失败!${NC}"; return 1; }
+    echo -e "\n${GREEN}找到备份文件，开始下载备份文件... ${NC}"; wget -q --show-progress "$DL_URL" || { echo -e "${RED}下载失败!${NC}"; return 1; }
     echo -e "\n${GREEN}创建恢复目录并解压备份文件...${NC}"; mkdir "$RESTORE_DIR"
 
     # --- FIX START: 移除解压时不必要的-P参数，并简化命令 ---
