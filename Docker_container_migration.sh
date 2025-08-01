@@ -153,7 +153,7 @@ full_docker_backup() {
     echo "MIGRATION_DIR=\$(cd \"\$(dirname \"\$0\")\" && pwd)" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
 
     for c in "${TARGET_CONTAINERS[@]}"; do
-        echo -e "\n${GREEN}--- 备份数据卷并生成 $c 的安装命令---${NC}"
+        echo -e "\n${GREEN}备份数据卷并生成 $c 的安装命令...${NC}"
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
@@ -162,7 +162,7 @@ full_docker_backup() {
     done
     sort -u "${BACKUP_DIR}/volume_paths.txt.tmp" > "${BACKUP_DIR}/volume_paths.txt"; rm "${BACKUP_DIR}/volume_paths.txt.tmp"
 
-    echo -e "\n${GREEN}--- 备份完成，执行打包程序... ---${NC}"
+    echo -e "\n${GREEN}备份完成，执行打包程序... ${NC}"
     tar_opts=("-czf" "$ARCHIVE_NAME"); if [[ "$OS_TYPE" == "macos" ]]; then tar_opts+=("-P"); else tar_opts+=("--absolute-names"); fi
     sudo tar "${tar_opts[@]}" -C "${BACKUP_DIR}" "${RESTORE_SCRIPT}" -C / -T "${BACKUP_DIR}/volume_paths.txt" || { echo -e "${RED}打包失败!${NC}"; rm -rf "$BACKUP_DIR"; return 1; }
     rm -rf "$BACKUP_DIR"
