@@ -86,7 +86,7 @@ setup_nginx_for_download() {
   echo "正在重载 Nginx..."; sudo nginx -t || { echo -e "${RED}Nginx 配置测试失败！${NC}"; sudo rm -f "$conf_path"; return 1; }
   if [[ "$OS_TYPE" == "linux" ]]; then sudo systemctl reload nginx; else brew services reload nginx >/dev/null 2>&1 || brew services restart nginx >/dev/null 2>&1; fi
   if [ $? -ne 0 ]; then echo -e "${RED}重载 Nginx 失败，请检查端口 8889。${NC}"; sudo rm -f "$conf_path"; return 1; fi
-  echo -e "${GREEN}Nginx 已在 8889 端口上就绪。${NC}"; return 0
+  echo -e "${GREEN}临时下载服务器已搭建就绪。${NC}"; return 0
 }
 
 restore_nginx_config() {
@@ -153,7 +153,7 @@ full_docker_backup() {
     echo "MIGRATION_DIR=\$(cd \"\$(dirname \"\$0\")\" && pwd)" >> "${BACKUP_DIR}/${RESTORE_SCRIPT}"
 
     for c in "${TARGET_CONTAINERS[@]}"; do
-        echo -e "\n${YELLOW}--- 处理中: $c ---${NC}"
+        echo -e "\n${YELLOW}--- 备份并生成$c ---${NC}的安装命令"
         run_cmd=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock assaflavie/runlike "$c")
         clean_cmd=$(echo "$run_cmd" | sed -E 's/--hostname=[^ ]+ //g; s/--mac-address=[^ ]+ //g')
         modified_cmd=$(echo "$clean_cmd" | sed -E "s|-v ([^:]+):|-v \${MIGRATION_DIR}\\1:|g")
@@ -172,7 +172,7 @@ full_docker_backup() {
     local server_ip=$(get_server_ip)
     echo -e "\n${GREEN}--- ✅  备份完成！ ---${NC}"
     echo -e "下载地址: ${YELLOW}http://${server_ip}:8889/${ARCHIVE_NAME}${NC}"
-    echo -e "在新服务器上恢复时，只需要提供 IP 地址 ${YELLOW}${server_ip}${NC} 即可。"
+    echo -e "在新服务器上恢复时，只需要输入 IP 地址 ${YELLOW}${server_ip}${NC} 即可下载备份容器。"
 }
 
 
