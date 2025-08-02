@@ -159,7 +159,7 @@ install_frps() {
     auth_enabled=false
 
     if [[ "$use_auth" == "y" ]]; then
-        wget -qO "$FRP_DIR/fp-multiuser" "http://feria.eu.org/https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64"
+        wget -qO "$FRP_DIR/fp-multiuser" "https://feria.eu.org/https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64"
         chmod +x "$FRP_DIR/fp-multiuser"
 
         > "$CONFIG_DIR/tokens"
@@ -250,7 +250,7 @@ install_frpc() {
         esac
     fi
 
-    wget -qO /tmp/frp.tar.gz "https://gh.cococ.co/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"
+    wget -qO /tmp/frp.tar.gz "https://feria.eu.org/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"
     tar -zxf /tmp/frp.tar.gz -C /tmp/
     cp /tmp/frp_${FRP_VERSION}_linux_amd64/frpc "$BIN_DIR/" && chmod +x "$BIN_DIR/frpc"
 
