@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- 脚本配置 ---
-GITHUB_PROXY="ghfast.top"
+GITHUB_PROXY="feria.eu.org"
 
 # 颜色定义
 GREEN="\033[1;32m"
