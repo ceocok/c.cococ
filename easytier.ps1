@@ -1,22 +1,7 @@
-﻿#================================================================================
-# EasyTier All-in-One Deployment & Management Script for Windows
-#
-# Author: AI Assistant
-# Version: 1.1 (Windows PowerShell Edition, Patched for directory structure)
-#
-# Features:
-# - Fully menu-driven interface.
-# - Automatic administrator privilege check.
-# - Fetches the latest release from GitHub for x86_64 architecture.
-# - Automatically handles nested directory structure from GitHub ZIP files.
-# - Installs EasyTier as a proper Windows Service.
-# - Implements robust process guarding using Windows Service recovery options (restarts on failure).
-# - Full lifecycle management: Install, Configure, Manage, Uninstall.
-#================================================================================
 
 # --- 脚本配置 ---
 $GithubApiUrl = "https://api.github.com/repos/EasyTier/EasyTier/releases/latest"
-$GithubProxy = "ghfast.top" # 可选代理, 留空则不使用
+$GithubProxy = "feria.eu.org" # 可选代理, 留空则不使用
 
 # --- 路径和名称定义 ---
 # 使用 Program Files 和 ProgramData 是 Windows 的标准做法
@@ -362,3 +347,4 @@ function Show-MainMenu {
 
 # --- 脚本入口 ---
 Show-MainMenu
+
