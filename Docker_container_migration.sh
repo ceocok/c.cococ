@@ -249,7 +249,7 @@ migration_restore() {
 	echo "正在下载数据包..."
 	wget -q --show-progress "$data_url" -O "$DATA_ARCHIVE_NAME" || { echo -e "${RED}下载数据包失败!${NC}"; rm -f "$START_SCRIPT_NAME"; return 1; }
 	
-	echo -e "\n${YELLOW}正在以 root 权限解压数据到最终位置...${NC}"
+	echo -e "\n${YELLOW}正在解压数据到容器指定路径...${NC}"
 	# 使用 -P 来处理绝对路径, -p 保留权限, -C / 在根目录解压
 	if ! sudo tar -xzpf "$DATA_ARCHIVE_NAME" -P -C /; then
 		echo -e "${RED}解压数据失败！请检查文件是否损坏或磁盘空间。${NC}"
@@ -279,7 +279,7 @@ migration_restore() {
 main_menu() {
 	while true; do
 		echo -e "\n${BLUE}=============================================${NC}"
-		echo -e "      Docker 迁移与备份工具 v4.1 (优化版)"
+		echo -e "      Docker 迁移与备份工具 v4.1 (by:ceocok)"
 		echo -e "${BLUE}=============================================${NC}"
 		echo -e "  --- 请选择操作 ---"
 		echo -e "  ${GREEN}1.${NC}  Docker 迁移备份 (在源服务器运行)"
