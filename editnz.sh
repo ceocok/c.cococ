@@ -4,7 +4,7 @@
 # --- 配置 ---
 CONFIG_FILE="/opt/nezha/agent/config.yml"
 SERVICE_NAME="nezha-agent.service"
-DEFAULT_SERVER="docker.cnno.de:8008"
+DEFAULT_SERVER="nezha.cnno.de:8008"
 
 # --- 颜色定义  ---
 GREEN='\033[0;32m'
