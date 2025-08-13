@@ -24,6 +24,7 @@ declare -A script_names=(
   ["17"]="EasyTier组网"
   ["18"]="Docker迁移"
   ["19"]="系统换源"
+  ["20"]="哪吒换源"
   ["0"]="退出"
 )
 
@@ -47,6 +48,7 @@ declare -A scripts=(
   ["17"]="easytier.sh"
   ["18"]="Docker_container_migration.sh"
   ["19"]="yuan.sh"
+  ["20"]="editnz.sh"
 )
 
 # 显示菜单
