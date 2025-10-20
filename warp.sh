@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 当前脚本版本号
-VERSION='3.1.6'
+VERSION='3.1.8'
 
 # 环境变量用于在Debian或Ubuntu操作系统中设置非交互式（noninteractive）安装模式
 export DEBIAN_FRONTEND=noninteractive
@@ -13,8 +13,8 @@ trap cleanup_resources EXIT INT TERM
 
 E[0]="\n Language:\n 1. English (default) \n 2. 简体中文"
 C[0]="${E[0]}"
-E[1]="Remove best endpoint feature to adapt to official adjustments"
-C[1]="删除最优 Endpoint 功能以适应官方调整"
+E[1]="Enhance the script's compatibility with Arch Linux and EndeavourOS systems; 增强脚本对 Arch Linux 及 EndeavourOS 系统的兼容性"
+C[1]="1. 适配 Ubuntu 24.04 及以上版本安装 Warp，感谢网友 [Michaol] 提供的解决方案; 2. 适配 Debian 13 安装 Client，感谢用户 [ainp] 的反馈"
 E[2]="The script must be run as root, you can enter sudo -i and then download and run again. Feedback: [https://github.com/fscarmen/warp-sh/issues]"
 C[2]="必须以root方式运行脚本，可以输入 sudo -i 后重新下载运行，问题反馈:[https://github.com/fscarmen/warp-sh/issues]"
 E[3]="The TUN module is not loaded. You should turn it on in the control panel. Ask the supplier for more help. Feedback: [https://github.com/fscarmen/warp-sh/issues]"
@@ -487,7 +487,7 @@ check_operating_system() {
   alpine_warp_restart() { wg-quick down warp >/dev/null 2>&1; wg-quick up warp >/dev/null 2>&1; }
   alpine_warp_enable() { echo -e "/usr/bin/tun.sh\nwg-quick up warp" > /etc/local.d/warp.start; chmod +x /etc/local.d/warp.start; rc-update add local; wg-quick up warp >/dev/null 2>&1; }
 
-  REGEX=("debian" "ubuntu" "centos|red hat|kernel|alma|rocky" "alpine" "arch linux" "fedora")
+  REGEX=("debian" "ubuntu" "centos|red hat|kernel|alma|rocky" "alpine" "arch linux|endeavouros" "fedora")
   RELEASE=("Debian" "Ubuntu" "CentOS" "Alpine" "Arch" "Fedora")
   EXCLUDE=("---")
   MAJOR=("9" "16" "7" "" "" "37")
@@ -1175,11 +1175,13 @@ uninstall() {
   [ -e /usr/bin/warp_unlock.sh ] && bash <(curl -sSL https://gitlab.com/fscarmen/warp_unlock/-/raw/main/unlock.sh) -U -$L
 
   # 根据已安装情况执行卸载任务并显示结果
+  [[ "$SYSTEM" = 'Ubuntu' && "$MAJOR_VERSION" -ge 24 ]] && RESOLVER_PKG=resolvconf || RESOLVER_PKG=openresolv
+
   UNINSTALL_CHECK=("wg-quick" "warp-cli" "wireproxy")
   UNINSTALL_DO=("uninstall_warp" "uninstall_client" "uninstall_wireproxy")
-  UNINSTALL_DEPENDENCIES=("wireguard-tools openresolv " "" " openresolv ")
-  UNINSTALL_NOT_ARCH=("wireguard-dkms " "" "wireguard-dkms resolvconf ")
-  UNINSTALL_DNSMASQ=("ipset dnsmasq resolvconf ")
+  UNINSTALL_DEPENDENCIES=("wireguard-tools $RESOLVER_PKG " "" " $RESOLVER_PKG ")
+  UNINSTALL_NOT_ARCH=("wireguard-dkms " "" "wireguard-dkms $RESOLVER_PKG ")
+  UNINSTALL_DNSMASQ=("ipset dnsmasq $RESOLVER_PKG ")
   UNINSTALL_RESULT=("$(text 117)" "$(text 119)" "$(text 98)")
   for i in ${!UNINSTALL_CHECK[@]}; do
     [ -x "$(type -p ${UNINSTALL_CHECK[i]})" ] && UNINSTALL_DO_LIST[i]=1 && UNINSTALL_DEPENDENCIES_LIST+=${UNINSTALL_DEPENDENCIES[i]}
@@ -1188,7 +1190,7 @@ uninstall() {
   done
 
   # 列出依赖，确认是手动还是自动卸载
-  UNINSTALL_DEPENDENCIES_LIST=$(echo $UNINSTALL_DEPENDENCIES_LIST | sed "s/ /\n/g" | sort -u | paste -d " " -s)
+  UNINSTALL_DEPENDENCIES_LIST=$(awk '{for(i=1;i<=NF;i++) if(!seen[$i]++) printf("%s%s",(c++?" ":""),$i)}' <<< "$UNINSTALL_DEPENDENCIES_LIST")
   [ "$UNINSTALL_DEPENDENCIES_LIST" != '' ] && hint "\n $(text 79) \n" && reading " $(text 170) " CONFIRM_UNINSTALL
 
   # 卸载核心程序
@@ -1352,7 +1354,7 @@ wireproxy_onoff() {
     [ "$SYSTEM" = Alpine ] && rc-service wireproxy stop >/dev/null 2>&1 || systemctl stop wireproxy
     [[ ! $(ss -nltp | awk '{print $NF}' | awk -F \" '{print $2}') =~ wireproxy ]] && info " $(text 158) "
   else
-    local i=1; local j=3
+    local i=1; local j=5
     hint " $(text 11)\n $(text 12) "
     [ "$SYSTEM" = Alpine ] && rc-service wireproxy start >/dev/null 2>&1 || systemctl start wireproxy; sleep 1
     ip_case d wireproxy
@@ -1362,7 +1364,7 @@ wireproxy_onoff() {
       hint " $(text 12) "
       [ "$SYSTEM" = Alpine ] && rc-service wireproxy restart >/dev/null 2>&1 || systemctl restart wireproxy; sleep 1
       ip_case d wireproxy
-      if [[ "$i" = "$j" ]]; then
+      if [[ "$i" -gt "$j" ]]; then
         [ "$SYSTEM" = Alpine ] && rc-service wireproxy stop >/dev/null 2>&1 || systemctl stop wireproxy
         [ -z "$CONFIRM_TEAMS_INFO" ] && error " $(text 13) " || break
       fi
@@ -2098,6 +2100,7 @@ AllowedIPs = 0.0.0.0/0
 AllowedIPs = ::/0
 Endpoint = engage.cloudflareclient.com:2408
 EOF
+      chmod 600 /etc/wireguard/warp.conf
 
       cat > /etc/wireguard/NonGlobalUp.sh <<EOF
 sleep 5
@@ -2147,7 +2150,7 @@ EOF
         [ "$DEBIAN_VERSION" = '10' ]; then
         echo 'deb http://archive.debian.org/debian buster-backports main' > /etc/apt/sources.list.d/backports.list
       else
-        echo "deb http://deb.debian.org/debian $(awk -F '=' '/VERSION_CODENAME/{print $2}' /etc/os-release)-backports main" > /etc/apt/sources.list.d/backports.list
+        echo "deb http://deb.debian.org/debian $(awk -F '=' '/VERSION_CODENAME/{print $2}' /etc/os-release | sed 's/trixie/bookworm/')-backports main" > /etc/apt/sources.list.d/backports.list
       fi
       # 获取最新的软件包列表和更新已安装软件包的信息
       ${PACKAGE_UPDATE[int]}
@@ -2158,11 +2161,14 @@ EOF
       ;;
 
     Ubuntu )
+      # Ubuntu 24.04 及以上版本使用 resolvconf，以下版本则使用 openresolv
+       [ "$MAJOR_VERSION" -ge 24 ] && RESOLVER_PKG='resolvconf' || RESOLVER_PKG='openresolv'
+
       # 获取最新的软件包列表和更新已安装软件包的信息
       ${PACKAGE_UPDATE[int]}
 
       # 安装一些必要的网络工具包和 wireguard-tools (Wire-Guard 配置工具:wg、wg-quick)
-      ${PACKAGE_INSTALL[int]} --no-install-recommends net-tools openresolv dnsutils iptables
+      ${PACKAGE_INSTALL[int]} --no-install-recommends net-tools $RESOLVER_PKG dnsutils iptables
       [ "$IS_PUFFERFFISH" != 'is_pufferffish' ] && ${PACKAGE_INSTALL[int]} --no-install-recommends wireguard-tools
       ;;
 
@@ -2202,6 +2208,11 @@ EOF
       local WIREGUARD_TOOLS_VERSION=$(wg --version | sed "s#.* v1\.0\.\([0-9]\+\) .*#\1#g")
       [[ "$WIREGUARD_TOOLS_VERSION" < 20210223 ]] && mv /tmp/wireguard-go-20201118 /usr/bin/wireguard-go || mv /tmp/wireguard-go-20230223 /usr/bin/wireguard-go
       rm -f /tmp/wireguard-go-*
+
+      # 为了兼容 Arch 及相关系统，wg-quick 在 set_dns 和 unset_dns 函数中加入 resolvconf -u
+      sed -i '/\[\[ \${#DNS\[@\]} -gt 0 \]\] || return 0/a\        cmd resolvconf -u' /usr/bin/wg-quick
+
+      # 如果用户选择使用 wireguard-go reserved 版本，则修改 wg-quick 文件
       if [ "$KERNEL_ENABLE" = '1' ]; then
         cp -f /usr/bin/wg-quick{,.origin}
         cp -f /usr/bin/wg-quick{,.reserved}
@@ -2542,7 +2553,7 @@ client_install() {
     if grep -q "CentOS\|Fedora" <<< "$SYSTEM"; then
       curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
     else
-      local VERSION_CODENAME=$(awk -F '=' '/VERSION_CODENAME/{print $2}' /etc/os-release)
+      local VERSION_CODENAME=$(awk -F '=' '/VERSION_CODENAME/{print $2}' /etc/os-release | sed 's/trixie/bookworm/')
       [ -x "$(type -p gpg)" ] || ${PACKAGE_INSTALL[int]} gnupg 2>/dev/null
       curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
       echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $VERSION_CODENAME main" | tee /etc/apt/sources.list.d/cloudflare-client.list
@@ -3370,3 +3381,4 @@ case "$OPTION" in
   * )
     menu
 esac
+解释
