@@ -235,6 +235,7 @@ disable_p2p = false
 relay_all_peer_rpc = false
 disable_udp_hole_punching = false
 enableKcp_Proxy = true
+enableQuic_Proxy = true
 EOF
 	if [ $? -eq 0 ]; then echo "已成功创建默认配置文件: ${CONFIG_FILE}"; return 0;
 	else echo -e "${RED}错误: 创建配置文件失败!${NC}"; return 1; fi; }
