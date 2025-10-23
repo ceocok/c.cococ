@@ -24,7 +24,7 @@ declare -A script_names=(
   ["17"]="EasyTier组网"
   ["18"]="Docker迁移"
   ["19"]="修改SSH端口"
-  ["20"]="Caddy反代"
+  ["20"]="Caddy管理"
   ["21"]="系统换源"
   ["22"]="哪吒换源"
   
