@@ -498,7 +498,7 @@ main_menu() {
         printf "%b" " ${C_CYAN}2. 添加静态网站${C_NC}\n"
         printf "%b" " ${C_CYAN}3. 现有站点管理${C_NC}\n"
         printf "%b" " ${C_CYAN}4. 查看运行日志${C_NC}\n"
-        printf "%b" " ${C_CYAN}5. 重载 Caddy${C_NC}\n"
+        printf "%b" " ${C_CYAN}5. 手动重载Caddy${C_NC}\n"
         printf "%b" " ${C_CYAN}6. 备份或者恢复${C_NC}\n"
         printf "%b" " ${C_RED}0. 退出${C_NC}\n"
         printf "%b" "${C_WHITE}-----------------------------------${C_NC}\n"
