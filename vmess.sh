@@ -150,9 +150,108 @@ stop_xray() {
     elif rc-service --version >/dev/null 2>&1; then # 新增: Alpine 停止方式
         rc-service xray stop || true
     else
-        pkill xray || true
+        pkill -f "$XRAY_BIN" || true
     fi
 }
+
+# (******************* 新增功能 *******************)
+# 重启 Xray
+restart_xray() {
+    echo "➡️ 正在重启 Xray 服务..."
+    if systemctl --version >/dev/null 2>&1; then
+        systemctl restart xray
+        sleep 2
+        if ! systemctl is-active --quiet xray; then
+            red "❌ Xray (systemd) 重启失败，请检查配置或日志 'journalctl -u xray'。"
+            return 1
+        fi
+    elif rc-service --version >/dev/null 2>&1; then
+        rc-service xray restart
+        sleep 2
+        if ! rc-service -e xray; then
+            red "❌ Xray (OpenRC) 重启失败，请检查配置。"
+            return 1
+        fi
+    else
+        yellow "⚠️ 正在使用 nohup 模式重启 (pkill + start)..."
+        pkill -f "$XRAY_BIN" || true
+        sleep 1
+        nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
+        sleep 2
+        if ! pgrep -f "$XRAY_BIN" >/dev/null; then
+            red "❌ Xray (nohup) 重启失败，请检查配置。"
+            return 1
+        fi
+    fi
+    green "✅ Xray 服务已成功重启。"
+    return 0
+}
+
+# 修改端口
+modify_port() {
+    echo "➡️ 准备修改 Xray 监听端口..."
+    [ ! -f "$CONFIG_FILE" ] && red "❌ 未找到 Xray 配置文件: $CONFIG_FILE" && exit 1
+    ensure_command "jq"
+
+    local current_port
+    current_port=$(jq -r '.inbounds[0].port' "$CONFIG_FILE")
+    if [ -z "$current_port" ]; then
+        red "❌ 无法从 $CONFIG_FILE 中读取当前端口。"
+        exit 1
+    fi
+
+    echo "当前监听端口为: $current_port"
+    echo -n "请输入新的监听端口 (1-65535): "
+    read -r new_port
+
+    # 验证新端口
+    if ! echo "$new_port" | grep -Eq '^[0-9]+$' || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        red "❌ 端口 '$new_port' 无效。请输入 1-65535 之间的数字。"
+        exit 1
+    fi
+
+    if [ "$new_port" = "$current_port" ]; then
+        yellow "⚠️ 新端口与当前端口相同 ($current_port)，未做任何更改。"
+        exit 0
+    fi
+
+    # 检查新端口是否被占用
+    ensure_command "fuser"
+    if fuser "$new_port/tcp" >/dev/null 2>&1; then
+        yellow "⚠️ 警告：端口 $new_port 似乎已被其他进程占用。脚本将继续尝试..."
+    fi
+
+    echo "⏳ 正在将端口 $current_port 修改为 $new_port..."
+    
+    local tmp_file
+    tmp_file=$(mktemp)
+    # 使用 jq 修改配置。使用 --argjson 传递数字更安全
+    if ! jq --argjson newport "$new_port" '.inbounds[0].port = $newport' "$CONFIG_FILE" > "$tmp_file"; then
+        red "❌ 使用 jq 修改配置文件失败。"
+        rm -f "$tmp_file"
+        exit 1
+    fi
+    mv -f "$tmp_file" "$CONFIG_FILE"
+
+    green "✅ 配置文件已更新。"
+
+    if restart_xray; then
+        green "🎉 端口修改成功！"
+        # 显示新的配置信息
+        show_vmess_link
+    else
+        red "❌ 服务重启失败。配置可能已更新，但服务未启动。"
+        red "❌ 正在尝试回滚端口更改..."
+        # 尝试回滚
+        jq --argjson oldport "$current_port" '.inbounds[0].port = $oldport' "$CONFIG_FILE" > "$tmp_file" 2>/dev/null
+        mv -f "$tmp_file" "$CONFIG_FILE" 2>/dev/null
+        red "端口已尝试回滚至 $current_port。请手动检查服务状态。"
+        exit 1
+    fi
+    exit 0 # 确保在 show_vmess_link 之后退出
+}
+# (***************** 新增功能结束 *****************)
+
 
 # 核心卸载逻辑（用于重新安装），保留证书和crontab
 uninstall_for_reinstall() {
@@ -220,13 +319,15 @@ uninstall_xray() {
     exit 0
 }
 
+# (******************* 修改菜单 *******************)
 # 如果已安装 Xray，显示此菜单
 menu_if_installed() {
   green "❗ 检测到 Xray 已安装，请选择操作："
   echo "   1) 显示 VMess 配置和链接"
   echo "   2) 重新安装 Xray (保留证书)"
   echo "   3) 彻底卸载 Xray (删除证书)"
-  echo -n "请输入选项 [1-3]，按 Enter 键: "
+  echo "   4) 修改 Xray 监听端口" # <-- 新增选项
+  echo -n "请输入选项 [1-4]，按 Enter 键: " # <-- 修改范围
   read -r option
   case "$option" in
     1) show_vmess_link ;;
@@ -237,9 +338,13 @@ menu_if_installed() {
     3)
       uninstall_xray
       ;;
+    4) 
+      modify_port # <-- 新增 case
+      ;;
     *) red "❌ 无效选项" && exit 1 ;;
   esac
 }
+# (***************** 菜单修改结束 *****************)
 
 # 安装 Xray 核心文件
 install_xray_core() {
@@ -383,7 +488,7 @@ EOF
 }
 
 # ***************************************************************
-# ***                      核心修改部分                       ***
+# ***                      核心修改部分                       ***
 # ***************************************************************
 
 # 创建并启动 systemd/openrc/nohup 服务
