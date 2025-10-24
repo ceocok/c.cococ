@@ -176,7 +176,6 @@ setup_launcher() {
     fi
 
     if [ "$needs_creation" -eq 1 ]; then
-        printf "%b" "${C_CYAN}正在自动创建快捷启动...${C_NC}\n"
         
         tee "$SCRIPT_DEST" > /dev/null << EOF
 #!/bin/bash
@@ -193,8 +192,7 @@ fi
 EOF
         chmod +x "$SCRIPT_DEST"
         
-        printf "%b" "${C_GREEN} 快捷启动器已创建 (${C_WHITE}/usr/local/bin/ca${C_GREEN})。${C_NC}\n"
-        printf "%b" "${C_YELLOW}您现在可以输入'ca'运行CaddyMan。${C_NC}\n"
+        printf "%b" "${C_GREEN} 快捷启动器已创建,您现在可以输入'ca'运行CaddyMan。${C_NC}\n"
     fi
 }
 
@@ -254,7 +252,6 @@ install_caddy() {
     
     setup_launcher
     
-    printf "%b" "${C_GREEN}安装/检查完成。${C_NC}\n"
 }
 
 view_logs() {
@@ -476,7 +473,7 @@ backup_restore_menu_7() {
 
 add_proxy() {
     printf "%b" "${C_CYAN}--- 2. 添加反向代理 ---${C_NC}\n"
-    printf "%b" "循环输入域名和端口。在 ${C_YELLOW}'输入域名'${C_NC} 直接回车退出。\n"
+    printf "%b" "循环输入域名和端口。\n"
     local count=0
     
     while true; do
