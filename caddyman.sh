@@ -192,7 +192,6 @@ fi
 EOF
         chmod +x "$SCRIPT_DEST"
         
-        printf "%b" "${C_GREEN} 快捷启动器已创建,您现在可以输入'ca'运行CaddyMan。${C_NC}\n"
     fi
 }
 
@@ -238,7 +237,7 @@ install_caddy() {
             exit 1; 
         fi
         
-        printf "%b" "${C_GREEN}Caddy 安装成功。${C_NC}\n"
+        printf "%b" "${C_GREEN}Caddy 安装成功。您现在可以输入'ca'运行CaddyMan${C_NC}\n"
         
         if [ "$SERVICE_CMD" = "systemctl" ]; then
             $SERVICE_CMD enable --now caddy > /dev/null 2>&1
