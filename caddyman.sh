@@ -41,17 +41,36 @@ detect_os() {
     fi
 }
 
+# --- [V12.0 - 已修改] ---
 get_public_ip() {
-    IP=$(curl -s4 icanhazip.com)
-    [ -z "$IP" ] && IP=$(curl -s4 ifconfig.me/ip)
-    [ -z "$IP" ] && IP=$(curl -s4 api.ipify.org)
-    [ -z "$IP" ] && IP=$(curl -s4 checkip.amazonaws.com)
+    # 优先尝试获取 IPv6
+    IP=$(curl -s6 icanhazip.com)
+    [ -z "$IP" ] && IP=$(curl -s6 ifconfig.me/ip)
+    [ -z "$IP" ] && IP=$(curl -s6 api.ipify.org)
     
     if [ -z "$IP" ]; then
-        printf "%b" "\n${C_YELLOW}警告: 无法自动获取服务器的 Public IP。${C_NC}\n"
+        printf "%b" "\n${C_YELLOW}警告: 无法自动获取服务器的 Public IPv6。${C_NC}\n"
+        printf "%b" "正在尝试获取 IPv4...\n"
+        # 降级尝试 IPv4
+        IP=$(curl -s4 icanhazip.com)
+        [ -z "$IP" ] && IP=$(curl -s4 ifconfig.me/ip)
+    fi
+    
+    if [ -z "$IP" ]; then
+        printf "%b" "\n${C_RED}错误: 无法获取任何 Public IP (v4 或 v6)。${C_NC}\n"
         printf "%b" "DNS 检查将被跳过。请手动确保您的域名指向正确。\n\n"
     fi
     PUBLIC_IP="$IP"
+    
+    # 在脚本的其余部分设置 IP 类型
+    IP_TYPE="IPv4"
+    if echo "$PUBLIC_IP" | grep -q '::'; then
+        IP_TYPE="IPv6"
+    fi
+    
+    if [ -n "$PUBLIC_IP" ]; then
+        printf "%b" "检测到 Public ${C_WHITE}$IP_TYPE${C_NC} : ${C_WHITE}$PUBLIC_IP${C_NC}\n"
+    fi
 }
 
 check_caddy_installed() {
@@ -63,6 +82,7 @@ check_caddy_installed() {
     return 0
 }
 
+# --- [V12.0 - 已修改] ---
 check_dns() {
     domain=$1
     if [ -z "$PUBLIC_IP" ]; then
@@ -70,32 +90,58 @@ check_dns() {
         return 0
     fi
     
-    printf "%b" "${C_CYAN}正在检查 $domain 的 DNS A 记录...${C_NC}\n"
-    domain_ip=$(getent hosts "$domain" | awk '!/::/ { print $1 }' | head -n 1)
+    local domain_ip=""
     
-    if [ -z "$domain_ip" ]; then
-        printf "%b" "${C_RED}******************************************************${C_NC}\n"
-        printf "%b" "${C_YELLOW}警告: 无法解析域名 $domain。${C_NC}\n"
-        printf "%b" "请确保您已在 DNS 提供商处创建了 A 记录。\n"
-        printf "%b" "${C_RED}******************************************************${C_NC}\n"
-        printf "%b" "${C_YELLOW}是否仍然要创建配置 (y/n)? ${C_NC}"
-        read confirm
-        [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || return 1
-    elif [ "$domain_ip" != "$PUBLIC_IP" ]; then
-        printf "%b" "${C_RED}******************************************************${C_NC}\n"
-        printf "%b" "${C_YELLOW}警告: DNS 记录不匹配！${C_NC}\n"
-        printf "%b" "   - 域名 $domain 解析到: ${C_WHITE}$domain_ip${C_NC}\n"
-        printf "%b" "   - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
-        printf "%b" "注意: 如果您使用 Cloudflare 代理(橙色云)，这是正常的。\n"
-        printf "%b" "${C_RED}******************************************************${C_NC}\n"
-        printf "%b" "${C_YELLOW}是否仍然要创建配置 (y/n)? ${C_NC}"
-        read confirm
-        [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || return 1
+    # 根据我们获取到的 IP 类型，决定是检查 AAAA 还是 A 记录
+    if [ "$IP_TYPE" = "IPv6" ]; then
+        # 检查 AAAA 记录
+        printf "%b" "${C_CYAN}正在检查 $domain 的 DNS AAAA 记录...${C_NC}\n"
+        domain_ip=$(getent hosts "$domain" | awk '/::/ { print $1 }' | head -n 1)
+        
+        if [ -z "$domain_ip" ]; then
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+            printf "%b" "${C_YELLOW}警告: 无法解析域名 $domain 的 AAAA 记录。${C_NC}\n"
+            printf "%b" "请确保您已在 DNS 提供商处创建了 AAAA 记录。\n"
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        elif [ "$domain_ip" != "$PUBLIC_IP" ]; then
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+            printf "%b" "${C_YELLOW}警告: DNS (AAAA) 记录不匹配！${C_NC}\n"
+            printf "%b" "   - 域名 $domain 解析到: ${C_WHITE}$domain_ip${C_NC}\n"
+            printf "%b" "   - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
+            printf "%b" "注意: 如果您使用 Cloudflare 代理(橙色云)，这是正常的。\n"
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        else
+            printf "%b" "${C_GREEN}DNS 检查通过: $domain (AAAA) 正确指向 $PUBLIC_IP.${C_NC}\n"
+            return 0
+        fi
+
     else
-        printf "%b" "${C_GREEN}DNS 检查通过: $domain 正确指向 $PUBLIC_IP.${C_NC}\n"
-        return 0
+        # 检查 A 记录 (原始逻辑)
+        printf "%b" "${C_CYAN}正在检查 $domain 的 DNS A 记录...${C_NC}\n"
+        domain_ip=$(getent hosts "$domain" | awk '!/::/ { print $1 }' | head -n 1)
+        
+        if [ -z "$domain_ip" ]; then
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+            printf "%b" "${C_YELLOW}警告: 无法解析域名 $domain 的 A 记录。${C_NC}\n"
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        elif [ "$domain_ip" != "$PUBLIC_IP" ]; then
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+            printf "%b" "${C_YELLOW}警告: DNS (A) 记录不匹配！${C_NC}\n"
+            printf "%b" "   - 域名 $domain 解析到: ${C_WHITE}$domain_ip${C_NC}\n"
+            printf "%b" "   - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
+            printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        else
+            printf "%b" "${C_GREEN}DNS 检查通过: $domain (A) 正确指向 $PUBLIC_IP.${C_NC}\n"
+            return 0
+        fi
     fi
+
+    # 如果 DNS 检查失败 (无论是 A 还是 AAAA)
+    printf "%b" "${C_YELLOW}是否仍然要创建配置 (y/n)? ${C_NC}"
+    read confirm
+    [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || return 1
 }
+
 
 reload_caddy() {
     printf "%b" "${C_CYAN}正在验证并重载 Caddy...${C_NC}"
@@ -650,12 +696,12 @@ manage_sites_menu() {
 }
 
 
-# --- 主菜单 (V11.9 修正) ---
+# --- 主菜单 (V12.0 - IPv6 兼容) ---
 main_menu() {
     while true; do
         printf "%b" "\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_WHITE}  CaddyMan V11.9 ${C_NC}\n"
+        printf "%b" " ${C_WHITE}   CaddyMan V12.0  ${C_NC}\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
         printf "%b" " ${C_GREEN}1. 安装Caddy服务${C_NC}\n"
         printf "%b" " ${C_CYAN}2. 添加反向代理${C_NC}\n"
