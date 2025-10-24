@@ -347,7 +347,6 @@ uninstall_caddy() {
     local launcher_path="/usr/local/bin/ca"
     if [ -f "$launcher_path" ]; then
         rm -f "$launcher_path"
-        printf "%b" "   - 已删除: $launcher_path\n"
     else
         printf "%b" "   - $launcher_path 未找到，跳过清理。\n"
     fi
