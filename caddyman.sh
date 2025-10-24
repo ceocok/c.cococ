@@ -660,7 +660,7 @@ main_menu() {
     while true; do
         printf "%b" "\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_WHITE}CaddyMan V11.9 (Quiet Uninstall)${C_NC}\n"
+        printf "%b" " ${C_WHITE}  CaddyMan V11.9 ${C_NC}\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
         printf "%b" " ${C_GREEN}1. 安装Caddy服务${C_NC}\n"
         printf "%b" " ${C_CYAN}2. 添加反向代理${C_NC}\n"
