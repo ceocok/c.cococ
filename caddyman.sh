@@ -57,7 +57,7 @@ get_public_ip() {
 check_caddy_installed() {
     if ! command -v caddy > /dev/null; then
         printf "%b" "\n${C_RED}错误: Caddy 尚未安装。${C_NC}\n"
-        printf "%b" "请先在主菜单中选择 ${C_WHITE}'1. 安装/检查 Caddy'${C_NC}。\n"
+        printf "%b" "请先在主菜单中选择 ${C_WHITE}'1. 安装Caddy服务'${C_NC}。\n"
         return 1
     fi
     return 0
