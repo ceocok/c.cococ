@@ -21,7 +21,6 @@ C_NC='\033[0m'       # 无颜色 (重置)
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
         printf "%b" "${C_RED}错误: 此脚本必须以 root 权限运行。${C_NC}\n"
-        printf "%b" "请尝试: sudo $0\n"
         exit 1
     fi
 }
@@ -31,13 +30,13 @@ detect_os() {
     SERVICE_CMD=""
     
     if command -v apt > /dev/null; then
-        PKG_MANAGER="apt"
+        PKG_MANAGER="apt-get"
         SERVICE_CMD="systemctl"
     elif command -v apk > /dev/null; then
         PKG_MANAGER="apk"
         SERVICE_CMD="rc-service"
     else
-        printf "%b" "${C_RED}错误: 无法识别的包管理器。支持 apt (Debian/Ubuntu) 和 apk (Alpine)。${C_NC}\n"
+        printf "%b" "${C_RED}错误: 无法识别的包管理器。支持 apt-get (Debian/Ubuntu) 和 apk (Alpine)。${C_NC}\n"
         exit 1
     fi
 }
@@ -53,6 +52,15 @@ get_public_ip() {
         printf "%b" "DNS 检查将被跳过。请手动确保您的域名指向正确。\n\n"
     fi
     PUBLIC_IP="$IP"
+}
+
+check_caddy_installed() {
+    if ! command -v caddy > /dev/null; then
+        printf "%b" "\n${C_RED}错误: Caddy 尚未安装。${C_NC}\n"
+        printf "%b" "请先在主菜单中选择 ${C_WHITE}'1. 安装/检查 Caddy'${C_NC}。\n"
+        return 1
+    fi
+    return 0
 }
 
 check_dns() {
@@ -89,7 +97,6 @@ check_dns() {
     fi
 }
 
-# (此函数仍然保留，供其他函数内部调用)
 reload_caddy() {
     printf "%b" "${C_CYAN}正在验证并重载 Caddy...${C_NC}"
     
@@ -124,45 +131,6 @@ reload_caddy() {
     printf "%b" " ${C_GREEN}完成！${C_NC}\n"
 }
 
-install_caddy() {
-    if ! command -v curl > /dev/null; then
-        printf "%b" "${C_CYAN}正在安装 'curl' (用于 DNS 检查)...${C_NC}\n"
-        if [ "$PKG_MANAGER" = "apt" ]; then
-            apt update > /dev/null
-            apt install -y curl
-        elif [ "$PKG_MANAGER" = "apk" ]; then
-            apk add curl
-        fi
-    fi
-
-    if command -v caddy > /dev/null; then
-        return 0
-    fi
-    
-    printf "%b" "${C_CYAN}正在安装 Caddy (标准版)...${C_NC}\n"
-    
-    if [ "$PKG_MANAGER" = "apt" ];
-    then
-        apt install -y debian-keyring debian-archive-keyring apt-transport-https > /dev/null
-        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
-        apt update > /dev/null
-        apt install -y caddy
-    elif [ "$PKG_MANAGER" = "apk" ]; then
-        apk add caddy
-    fi
-    
-    if ! command -v caddy > /dev/null; then printf "%b" "${C_RED}错误: Caddy 安装失败。${C_NC}\n"; exit 1; fi
-    printf "%b" "${C_GREEN}Caddy 安装成功。${C_NC}\n"
-    
-    if [ "$SERVICE_CMD" = "systemctl" ]; then
-        $SERVICE_CMD enable --now caddy
-    elif [ "$SERVICE_CMD" = "rc-service" ]; then
-        rc-update add caddy default
-        $SERVICE_CMD caddy start
-    fi
-}
-
 setup_conf_d() {
     mkdir -p "$CADDYFILE_CONF_D"
     IMPORT_LINE="import $CADDYFILE_CONF_D/*.caddy"
@@ -177,14 +145,8 @@ setup_conf_d() {
     if [ "$non_comment_lines" != "$IMPORT_LINE" ]; then
         
         if [ -n "$non_comment_lines" ]; then
-            printf "%b" "${C_YELLOW}检测到 $CADDYFILE_MAIN 中存在非 CaddyMan 管理的配置 (例如 'Caddy works')。${C_NC}\n"
-            printf "%b" "为了防止冲突，脚本将自动备份并覆盖它。\n"
-            
             local backup_file="$CADDYFILE_MAIN.bak.$(date +%s)"
             cp "$CADDYFILE_MAIN" "$backup_file"
-            printf "%b" "原始 Caddyfile 已备份到 ${C_CYAN}$backup_file${C_NC}\n"
-        else
-             printf "%b" "${C_CYAN}正在配置 $CADDYFILE_MAIN 以导入 $CADDYFILE_CONF_D/ ...${C_NC}\n"
         fi
 
         tee "$CADDYFILE_MAIN" > /dev/null << EOL
@@ -192,9 +154,107 @@ setup_conf_d() {
 
 $IMPORT_LINE
 EOL
-        printf "%b" "${C_GREEN}$CADDYFILE_MAIN 已被设置为只导入 conf.d 目录。${C_NC}\n"
-        reload_caddy
+        
+        if command -v caddy > /dev/null && $SERVICE_CMD status caddy > /dev/null 2>&1; then
+             caddy reload --config "$CADDYFILE_MAIN" > /dev/null 2>&1
+        fi
     fi
+}
+
+setup_launcher() {
+    local SCRIPT_DEST="/usr/local/bin/ca"
+    local SCRIPT_URL="https://raw.githubusercontent.com/ceocok/c.cococ/main/caddyman.sh"
+    
+    local needs_creation=0
+    
+    if [ ! -f "$SCRIPT_DEST" ]; then
+        needs_creation=1
+    else
+        if ! grep -q "$SCRIPT_URL" "$SCRIPT_DEST"; then
+            needs_creation=1
+        fi
+    fi
+
+    if [ "$needs_creation" -eq 1 ]; then
+        printf "%b" "${C_CYAN}正在自动创建快捷启动...${C_NC}\n"
+        
+        tee "$SCRIPT_DEST" > /dev/null << EOF
+#!/bin/bash
+# CaddyMan Launcher
+# Runs the script from GitHub as root
+SCRIPT_URL="$SCRIPT_URL"
+
+if [ "\$(id -u)" -ne 0 ]; then
+    echo "此脚本需要 root 权限，正在使用 sudo..."
+    exec sudo bash <(curl -sL \$SCRIPT_URL) "\$@"
+else
+    exec bash <(curl -sL \$SCRIPT_URL) "\$@"
+fi
+EOF
+        chmod +x "$SCRIPT_DEST"
+        
+        printf "%b" "${C_GREEN} 快捷启动器已创建 (${C_WHITE}/usr/local/bin/ca${C_GREEN})。${C_NC}\n"
+        printf "%b" "${C_YELLOW}您现在可以输入'ca'运行CaddyMan。${C_NC}\n"
+    fi
+}
+
+
+install_caddy() {
+    export DEBIAN_FRONTEND=noninteractive
+    
+    local caddy_was_installed=0
+    if command -v caddy > /dev/null; then
+        caddy_was_installed=1
+    fi
+
+    if ! command -v curl > /dev/null; then
+        printf "%b" "${C_CYAN}正在安装 'curl' (依赖)...${C_NC}\n"
+        if [ "$PKG_MANAGER" = "apt-get" ]; then
+            $PKG_MANAGER -qq update > /dev/null 2>&1
+            $PKG_MANAGER -qq install -y curl
+        elif [ "$PKG_MANAGER" = "apk" ]; then
+            apk add curl
+        fi
+    fi
+
+    if [ "$caddy_was_installed" -eq 1 ]; then
+        printf "%b" "\n${C_GREEN}Caddy 已经安装。${C_NC}\n"
+    else
+        printf "%b" "${C_CYAN}正在安装 Caddy (标准版)...${C_NC}\n"
+        
+        if [ "$PKG_MANAGER" = "apt-get" ];
+        then
+            $PKG_MANAGER -qq install -y debian-keyring debian-archive-keyring apt-transport-https > /dev/null 2>&1
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+            $PKG_MANAGER -qq update > /dev/null 2>&1
+            
+            $PKG_MANAGER -q install -y caddy
+            
+        elif [ "$PKG_MANAGER" = "apk" ]; then
+            apk add caddy
+        fi
+        
+        if ! command -v caddy > /dev/null; then 
+            printf "%b" "${C_RED}错误: Caddy 安装失败。${C_NC}\n"; 
+            exit 1; 
+        fi
+        
+        printf "%b" "${C_GREEN}Caddy 安装成功。${C_NC}\n"
+        
+        if [ "$SERVICE_CMD" = "systemctl" ]; then
+            $SERVICE_CMD enable --now caddy > /dev/null 2>&1
+        elif [ "$SERVICE_CMD" = "rc-service" ]; then
+            rc-update add caddy default
+            $SERVICE_CMD caddy start
+        fi
+    fi
+    
+    setup_conf_d
+    
+    setup_launcher
+    
+    printf "%b" "${C_GREEN}安装/检查完成。${C_NC}\n"
 }
 
 view_logs() {
@@ -210,8 +270,6 @@ view_logs() {
         printf "%b" "${C_RED}未找到 Caddy 日志。请检查 /var/log/caddy/ 或 'rc-service caddy settings'。${C_NC}\n"
     fi
 }
-
-# --- V11 新增函数 (服务管理) ---
 
 check_caddy_status() {
     printf "%b" "\n${C_CYAN}--- 检查 Caddy 服务状态 ---${C_NC}\n"
@@ -250,10 +308,13 @@ restart_caddy() {
     fi
 }
 
+
 uninstall_caddy() {
+    export DEBIAN_FRONTEND=noninteractive
+
     printf "%b" "\n${C_RED}--- 卸载 Caddy ---${C_NC}\n"
-    printf "%b" "${C_RED}警告: 这将 ${C_WHITE}彻底停止并卸载 Caddy${C_RED}！\n"
-    printf "%b" "${C_RED}此操作还会删除 ${C_WHITE}$CADDYFILE_MAIN${C_RED} 和 ${C_WHITE}$CADDYFILE_CONF_D${C_RED} 目录。\n"
+    printf "%b" "${C_RED}警告: 这将 ${C_WHITE}彻底停止、卸载并清除 (purge) Caddy${C_RED}！\n"
+    printf "%b" "${C_RED}此操作将删除软件包和所有配置文件 (${C_WHITE}/etc/caddy${C_RED})。\n"
     printf "%b" "${C_YELLOW}您确定要继续吗? (y/n): ${C_NC}"
     read confirm
     [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { printf "%b" "操作取消。\n"; return; }
@@ -271,23 +332,28 @@ uninstall_caddy() {
         rc-update del caddy default > /dev/null 2>&1
     fi
 
-    printf "%b" "${C_CYAN}2. 正在卸载 Caddy 软件包...${C_NC}\n"
-    if [ "$PKG_MANAGER" = "apt" ]; then
-        apt remove --purge -y caddy > /dev/null
+    printf "%b" "${C_CYAN}2. 正在卸载并清除 (purge) Caddy 软件包...${C_NC}\n"
+    if [ "$PKG_MANAGER" = "apt-get" ]; then
+        # V11.9: --purge 会自动删除 /etc/caddy，解决了问题1
+        $PKG_MANAGER -q remove --purge -y caddy > /dev/null
         printf "%b" "${C_CYAN}   - 正在清理 Caddy (apt) 仓库文件...${C_NC}\n"
         rm -f /etc/apt/sources.list.d/caddy-stable.list
         rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-        apt update > /dev/null
+        $PKG_MANAGER -qq update > /dev/null 2>&1
     elif [ "$PKG_MANAGER" = "apk" ]; then
+        # V11.9: apk del 默认就会清除配置
         apk del caddy > /dev/null
     fi
 
-    printf "%b" "${C_CYAN}3. 正在清理 CaddyMan 配置文件...${C_NC}\n"
-    rm -f "$CADDYFILE_MAIN"
-    rm -f "$CADDYFILE_MAIN.bak."*
-    rm -rf "$CADDYFILE_CONF_D"
-    printf "%b" "   - 已删除: $CADDYFILE_MAIN\n"
-    printf "%b" "   - 已删除: $CADDYFILE_CONF_D\n"
+ 
+    printf "%b" "${C_CYAN}3. 正在清理 'ca' 启动器...${C_NC}\n"
+    local launcher_path="/usr/local/bin/ca"
+    if [ -f "$launcher_path" ]; then
+        rm -f "$launcher_path"
+        printf "%b" "   - 已删除: $launcher_path\n"
+    else
+        printf "%b" "   - $launcher_path 未找到，跳过清理。\n"
+    fi
 
     printf "%b" "${C_GREEN}Caddy 已成功卸载。${C_NC}\n"
     printf "%b" "${C_YELLOW}注意: 备份文件 /root/caddyman_backup.tar.gz (如果存在) 未被删除。${C_NC}\n"
@@ -296,11 +362,11 @@ uninstall_caddy() {
     exit 0
 }
 
-# (重命名了函数以匹配菜单编号)
-service_management_menu_6() {
+
+service_management_menu_5() {
     while true; do
         printf "%b" "\n"
-        printf "%b" "${C_WHITE}--- 6. Caddy 服务管理 ---${C_NC}\n"
+        printf "%b" "${C_WHITE}--- 5. Caddy 服务管理 ---${C_NC}\n"
         printf "%b" " ${C_YELLOW}1. 查看 Caddy 状态${C_NC}\n"
         printf "%b" " ${C_YELLOW}2. 重启 Caddy 服务${C_NC}\n"
         printf "%b" " ${C_RED}3. 卸载 Caddy (危险!)${C_NC}\n"
@@ -318,8 +384,6 @@ service_management_menu_6() {
         esac
     done
 }
-
-# --- V9 核心函数 (备份/恢复) ---
 
 backup_sites() {
     printf "%b" "${C_CYAN}--- 备份所有站点 ---${C_NC}\n"
@@ -382,7 +446,7 @@ restore_sites() {
     
     if [ "$?" -eq 0 ]; then
         printf "%b" " ${C_GREEN}完成！${C_NC}\n"
-        printf "%b" "${C_GREEN}恢复成功！${C_NC} 正在自动重载 Caddy...\n"
+        printf "%b" "${C_GREEN}恢复成功！${C_NC} E正在自动重载 Caddy...\n"
         reload_caddy
     else
         printf "%b" " ${C_RED}失败！${C_NC}\n"
@@ -390,11 +454,10 @@ restore_sites() {
     fi
 }
 
-# (重命名了函数以匹配菜单编号)
-backup_restore_menu_5() {
+backup_restore_menu_7() {
     while true; do
         printf "%b" "\n"
-        printf "%b" "${C_WHITE}--- 5. 备份/恢复 Caddy ---${C_NC}\n"
+        printf "%b" "${C_WHITE}--- 7. 备份/恢复 Caddy ---${C_NC}\n"
         printf "%b" " ${C_YELLOW}1. 备份所有站点到/root/caddyman_backup.tar.gz${C_NC}\n"
         printf "%b" " ${C_YELLOW}2. 从/root/caddyman_backup.tar.gz 恢复站点${C_NC}\n"
         printf "%b" " ${C_RED}0. 返回主菜单${C_NC}\n"
@@ -411,10 +474,8 @@ backup_restore_menu_5() {
     done
 }
 
-# --- V10 核心函数 (站点管理) ---
-
 add_proxy() {
-    printf "%b" "${C_CYAN}--- 1. 添加反向代理 ---${C_NC}\n"
+    printf "%b" "${C_CYAN}--- 2. 添加反向代理 ---${C_NC}\n"
     printf "%b" "循环输入域名和端口。在 ${C_YELLOW}'输入域名'${C_NC} 直接回车退出。\n"
     local count=0
     
@@ -468,7 +529,7 @@ EOL
 }
 
 add_static_host() {
-    printf "%b" "${C_CYAN}--- 2. 添加静态网站 ---${C_NC}\n"
+    printf "%b" "${C_CYAN}--- 3. 添加静态网站 ---${C_NC}\n"
 
     printf "%b" "${C_YELLOW}请输入您的域名: ${C_NC}"
     read domain
@@ -516,7 +577,7 @@ EOL
 }
 
 manage_sites_menu() {
-    printf "%b" "\n${C_CYAN}--- 3. 现有站点管理 ---${C_NC}\n"
+    printf "%b" "\n${C_CYAN}--- 4. 现有站点管理 ---${C_NC}\n"
     local files
     files=$(ls -1 "$CADDYFILE_CONF_D"/*.caddy 2>/dev/null)
     
@@ -530,9 +591,9 @@ manage_sites_menu() {
     local count=1
     echo "$files" | sed "s|$CADDYFILE_CONF_D/||" | sed 's/\.caddy$//' | while read -r line; do
         if [ "$count" -lt 10 ]; then
-            printf "%b" "   ${C_WHITE} $count.${C_NC} $line\n"
+            printf "%b" "    ${C_WHITE} $count.${C_NC} $line\n"
         else
-            printf "%b" "   ${C_WHITE}$count.${C_NC} $line\n"
+            printf "%b" "    ${C_WHITE}$count.${C_NC} $line\n"
         fi
         count=$((count + 1))
     done
@@ -594,37 +655,59 @@ manage_sites_menu() {
 }
 
 
-# --- 主菜单 (V11.1 修正) ---
+# --- 主菜单 (V11.9 修正) ---
 main_menu() {
-    # (为了清晰，我将子菜单函数重命名以匹配它们的菜单编号)
-    # (backup_restore_menu -> backup_restore_menu_5)
-    # (service_management_menu -> service_management_menu_6)
-    
     while true; do
         printf "%b" "\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_WHITE}CaddyMan V11.1${C_NC}\n"
+        printf "%b" " ${C_WHITE}CaddyMan V11.9 (Quiet Uninstall)${C_NC}\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_CYAN}1. 添加反向代理${C_NC}\n"
-        printf "%b" " ${C_CYAN}2. 添加静态网站${C_NC}\n"
-        printf "%b" " ${C_CYAN}3. 现有站点管理${C_NC}\n"
-        printf "%b" " ${C_CYAN}4. 查看运行日志${C_NC}\n"
-        printf "%b" " ${C_CYAN}5. 备份或者恢复${C_NC}\n"
-        printf "%b" " ${C_CYAN}6. Caddy服务管理${C_NC}\n"
+        printf "%b" " ${C_GREEN}1. 安装Caddy服务${C_NC}\n"
+        printf "%b" " ${C_CYAN}2. 添加反向代理${C_NC}\n"
+        printf "%b" " ${C_CYAN}3. 添加静态网站${C_NC}\n"
+        printf "%b" " ${C_CYAN}4. 现有站点管理${C_NC}\n"
+        printf "%b" " ${C_CYAN}5. Caddy服务管理${C_NC}\n"
+        printf "%b" " ${C_CYAN}6. 查看运行日志${C_NC}\n"
+        printf "%b" " ${C_CYAN}7. 备份或者恢复${C_NC}\n"
         printf "%b" " ${C_RED}0. 退出${C_NC}\n"
         printf "%b" "${C_WHITE}-----------------------------------${C_NC}\n"
-        printf "%b" "${C_YELLOW}请输入您的选择 [0-6]: ${C_NC}"
+        printf "%b" "${C_YELLOW}请输入您的选择 [0-7]: ${C_NC}"
         read choice
         
         case "$choice" in
-            1) add_proxy ;;
-            2) add_static_host ;;
-            3) manage_sites_menu ;;
-            4) view_logs ;;
-            5) backup_restore_menu_5 ;;    # <--- 修正
-            6) service_management_menu_6 ;; # <--- 修正
+            1) install_caddy ;;
+            2)
+                if check_caddy_installed; then
+                    add_proxy
+                fi
+                ;;
+            3)
+                if check_caddy_installed; then
+                    add_static_host
+                fi
+                ;;
+            4)
+                if check_caddy_installed; then
+                    manage_sites_menu
+                fi
+                ;;
+            5) 
+                if check_caddy_installed; then
+                    service_management_menu_5
+                fi
+                ;;
+            6) 
+                if check_caddy_installed; then
+                    view_logs
+                fi
+                ;;
+            7) 
+                if check_caddy_installed; then
+                    backup_restore_menu_7
+                fi
+                ;;
             0) printf "%b" "${C_GREEN}再见！${C_NC}\n"; exit 0 ;;
-            *) printf "%b" "${C_RED}无效输入，请输入 0 到 6 之间的数字。${C_NC}\n" ;;
+            *) printf "%b" "${C_RED}无效输入，请输入 0 到 7 之间的数字。${C_NC}\n" ;;
         esac
     done
 }
@@ -632,7 +715,5 @@ main_menu() {
 # --- 脚本启动 ---
 check_root
 detect_os
-install_caddy
-setup_conf_d
-get_public_ip
+get_public_ip 
 main_menu
