@@ -89,6 +89,7 @@ check_dns() {
     fi
 }
 
+# (此函数仍然保留，供其他函数内部调用)
 reload_caddy() {
     printf "%b" "${C_CYAN}正在验证并重载 Caddy...${C_NC}"
     
@@ -210,7 +211,115 @@ view_logs() {
     fi
 }
 
-# --- V9 核心函数 ---
+# --- V11 新增函数 (服务管理) ---
+
+check_caddy_status() {
+    printf "%b" "\n${C_CYAN}--- 检查 Caddy 服务状态 ---${C_NC}\n"
+    if [ "$SERVICE_CMD" = "systemctl" ]; then
+        $SERVICE_CMD status caddy --no-pager
+    elif [ "$SERVICE_CMD" = "rc-service" ]; then
+        $SERVICE_CMD caddy status
+    else
+         printf "%b" "${C_RED}无法确定的服务管理器。${C_NC}\n"
+    fi
+    printf "%b" "${C_WHITE}----------------------------${C_NC}\n"
+}
+
+restart_caddy() {
+    printf "%b" "\n${C_CYAN}--- 正在重启 Caddy 服务 ---${C_NC}\n"
+    printf "%b" "正在执行: ${C_WHITE}$SERVICE_CMD ... restart${C_NC} ... "
+    
+    local restart_ok=1
+    if [ "$SERVICE_CMD" = "systemctl" ]; then
+        if ! $SERVICE_CMD restart caddy > /dev/null 2>&1; then
+            restart_ok=0
+        fi
+    elif [ "$SERVICE_CMD" = "rc-service" ]; then
+        if ! $SERVICE_CMD caddy restart > /dev/null 2>&1; then
+            restart_ok=0
+        fi
+    fi
+
+    if [ "$restart_ok" -eq 1 ]; then
+         printf "%b" "${C_GREEN}完成！${C_NC}\n"
+         sleep 1
+         check_caddy_status
+    else
+         printf "%b" "${C_RED}失败！${C_NC}\n"
+         printf "%b" "${C_RED}请手动检查 Caddy 日志。${C_NC}\n"
+    fi
+}
+
+uninstall_caddy() {
+    printf "%b" "\n${C_RED}--- 卸载 Caddy ---${C_NC}\n"
+    printf "%b" "${C_RED}警告: 这将 ${C_WHITE}彻底停止并卸载 Caddy${C_RED}！\n"
+    printf "%b" "${C_RED}此操作还会删除 ${C_WHITE}$CADDYFILE_MAIN${C_RED} 和 ${C_WHITE}$CADDYFILE_CONF_D${C_RED} 目录。\n"
+    printf "%b" "${C_YELLOW}您确定要继续吗? (y/n): ${C_NC}"
+    read confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { printf "%b" "操作取消。\n"; return; }
+
+    printf "%b" "${C_YELLOW}再次确认，您确定要完全卸载 Caddy 吗? (y/n): ${C_NC}"
+    read confirm2
+    [ "$confirm2" != "y" ] && [ "$confirm2" != "Y" ] && { printf "%b" "操作取消。\n"; return; }
+
+    printf "%b" "${C_CYAN}1. 正在停止并禁用 Caddy 服务...${C_NC}\n"
+    if [ "$SERVICE_CMD" = "systemctl" ]; then
+        $SERVICE_CMD stop caddy > /dev/null 2>&1
+        $SERVICE_CMD disable caddy > /dev/null 2>&1
+    elif [ "$SERVICE_CMD" = "rc-service" ]; then
+        $SERVICE_CMD caddy stop > /dev/null 2>&1
+        rc-update del caddy default > /dev/null 2>&1
+    fi
+
+    printf "%b" "${C_CYAN}2. 正在卸载 Caddy 软件包...${C_NC}\n"
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        apt remove --purge -y caddy > /dev/null
+        printf "%b" "${C_CYAN}   - 正在清理 Caddy (apt) 仓库文件...${C_NC}\n"
+        rm -f /etc/apt/sources.list.d/caddy-stable.list
+        rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        apt update > /dev/null
+    elif [ "$PKG_MANAGER" = "apk" ]; then
+        apk del caddy > /dev/null
+    fi
+
+    printf "%b" "${C_CYAN}3. 正在清理 CaddyMan 配置文件...${C_NC}\n"
+    rm -f "$CADDYFILE_MAIN"
+    rm -f "$CADDYFILE_MAIN.bak."*
+    rm -rf "$CADDYFILE_CONF_D"
+    printf "%b" "   - 已删除: $CADDYFILE_MAIN\n"
+    printf "%b" "   - 已删除: $CADDYFILE_CONF_D\n"
+
+    printf "%b" "${C_GREEN}Caddy 已成功卸载。${C_NC}\n"
+    printf "%b" "${C_YELLOW}注意: 备份文件 /root/caddyman_backup.tar.gz (如果存在) 未被删除。${C_NC}\n"
+    printf "%b" "${C_GREEN}脚本即将退出。${C_NC}\n"
+    
+    exit 0
+}
+
+# (重命名了函数以匹配菜单编号)
+service_management_menu_6() {
+    while true; do
+        printf "%b" "\n"
+        printf "%b" "${C_WHITE}--- 6. Caddy 服务管理 ---${C_NC}\n"
+        printf "%b" " ${C_YELLOW}1. 查看 Caddy 状态${C_NC}\n"
+        printf "%b" " ${C_YELLOW}2. 重启 Caddy 服务${C_NC}\n"
+        printf "%b" " ${C_RED}3. 卸载 Caddy (危险!)${C_NC}\n"
+        printf "%b" " ${C_RED}0. 返回主菜单${C_NC}\n"
+        printf "%b" "${C_WHITE}-----------------------------------${C_NC}\n"
+        printf "%b" "${C_YELLOW}请输入您的选择 [0-3]: ${C_NC}"
+        read choice
+
+        case "$choice" in
+            1) check_caddy_status ;;
+            2) restart_caddy ;;
+            3) uninstall_caddy ;;
+            0) break ;;
+            *) printf "%b" "${C_RED}无效输入，请输入 0 到 3 之间的数字。${C_NC}\n" ;;
+        esac
+    done
+}
+
+# --- V9 核心函数 (备份/恢复) ---
 
 backup_sites() {
     printf "%b" "${C_CYAN}--- 备份所有站点 ---${C_NC}\n"
@@ -281,10 +390,11 @@ restore_sites() {
     fi
 }
 
-backup_restore_menu() {
+# (重命名了函数以匹配菜单编号)
+backup_restore_menu_5() {
     while true; do
         printf "%b" "\n"
-        printf "%b" "${C_WHITE}--- 6. 备份/恢复 Caddy ---${C_NC}\n"
+        printf "%b" "${C_WHITE}--- 5. 备份/恢复 Caddy ---${C_NC}\n"
         printf "%b" " ${C_YELLOW}1. 备份所有站点到/root/caddyman_backup.tar.gz${C_NC}\n"
         printf "%b" " ${C_YELLOW}2. 从/root/caddyman_backup.tar.gz 恢复站点${C_NC}\n"
         printf "%b" " ${C_RED}0. 返回主菜单${C_NC}\n"
@@ -301,7 +411,7 @@ backup_restore_menu() {
     done
 }
 
-# --- V10 核心函数 ---
+# --- V10 核心函数 (站点管理) ---
 
 add_proxy() {
     printf "%b" "${C_CYAN}--- 1. 添加反向代理 ---${C_NC}\n"
@@ -405,7 +515,6 @@ EOL
     reload_caddy
 }
 
-# (V10.2: 修复了此函数中的 printf bug)
 manage_sites_menu() {
     printf "%b" "\n${C_CYAN}--- 3. 现有站点管理 ---${C_NC}\n"
     local files
@@ -440,7 +549,6 @@ manage_sites_menu() {
 
     case "$choice" in
         1)
-            # V10.2 修复: 将 $file_count 变量正确嵌入到 %b 字符串中
             printf "%b" "${C_YELLOW}请输入您要删除的站点的编号 [1-$file_count] (回车取消): ${C_NC}"
             read number
             
@@ -453,7 +561,6 @@ manage_sites_menu() {
             fi
             
             if [ "$number" -lt 1 ] || [ "$number" -gt "$file_count" ]; then
-                # V10.2 修复: 将 $file_count 变量正确嵌入到 %b 字符串中
                 printf "%b" "${C_RED}无效编号: 请输入 1 到 $file_count 之间的数字。${C_NC}\n"
                 return
             fi
@@ -487,19 +594,23 @@ manage_sites_menu() {
 }
 
 
-# --- 主菜单 (V10) ---
+# --- 主菜单 (V11.1 修正) ---
 main_menu() {
+    # (为了清晰，我将子菜单函数重命名以匹配它们的菜单编号)
+    # (backup_restore_menu -> backup_restore_menu_5)
+    # (service_management_menu -> service_management_menu_6)
+    
     while true; do
         printf "%b" "\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_WHITE}CaddyMan V10.2${C_NC}\n"
+        printf "%b" " ${C_WHITE}CaddyMan V11.1${C_NC}\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
         printf "%b" " ${C_CYAN}1. 添加反向代理${C_NC}\n"
         printf "%b" " ${C_CYAN}2. 添加静态网站${C_NC}\n"
         printf "%b" " ${C_CYAN}3. 现有站点管理${C_NC}\n"
         printf "%b" " ${C_CYAN}4. 查看运行日志${C_NC}\n"
-        printf "%b" " ${C_CYAN}5. 手动重载Caddy${C_NC}\n"
-        printf "%b" " ${C_CYAN}6. 备份或者恢复${C_NC}\n"
+        printf "%b" " ${C_CYAN}5. 备份或者恢复${C_NC}\n"
+        printf "%b" " ${C_CYAN}6. Caddy服务管理${C_NC}\n"
         printf "%b" " ${C_RED}0. 退出${C_NC}\n"
         printf "%b" "${C_WHITE}-----------------------------------${C_NC}\n"
         printf "%b" "${C_YELLOW}请输入您的选择 [0-6]: ${C_NC}"
@@ -510,8 +621,8 @@ main_menu() {
             2) add_static_host ;;
             3) manage_sites_menu ;;
             4) view_logs ;;
-            5) reload_caddy ;;
-            6) backup_restore_menu ;;
+            5) backup_restore_menu_5 ;;    # <--- 修正
+            6) service_management_menu_6 ;; # <--- 修正
             0) printf "%b" "${C_GREEN}再见！${C_NC}\n"; exit 0 ;;
             *) printf "%b" "${C_RED}无效输入，请输入 0 到 6 之间的数字。${C_NC}\n" ;;
         esac
