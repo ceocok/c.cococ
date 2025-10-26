@@ -41,37 +41,97 @@ detect_os() {
     fi
 }
 
-# --- [V12.0 - 已修改] ---
+# --- [V15.0 - 新增] ---
+# 检查 IP 是否为私有/环回/链接本地地址
+is_private_ip() {
+    local ip=$1
+    
+    # IPv4
+    case $ip in
+        10.*|127.*|169.254.*|192.168.*) return 0 ;; # 0 = true (是私有IP)
+        172.16.*|172.17.*|172.18.*|172.19.*) return 0 ;;
+        172.2*.*|172.30.*|172.31.*) return 0 ;;
+    esac
+
+    # IPv6
+    case $ip in
+        fe80:*) return 0 ;; # 链接本地
+        ::1) return 0 ;;    # 环回
+        fc00:*) return 0 ;; # 唯一本地
+    esac
+    
+    return 1 # 1 = false (是公网IP)
+}
+
+# --- [V15.0 - 优先Curl / 增加私有IP过滤 / 隐藏成功消息] ---
 get_public_ip() {
-    # 优先尝试获取 IPv6
-    IP=$(curl -s6 icanhazip.com)
-    [ -z "$IP" ] && IP=$(curl -s6 ifconfig.me/ip)
-    [ -z "$IP" ] && IP=$(curl -s6 api.ipify.org)
+    IP=""
+    IP_TYPE=""
+    # 常见的虚拟隧道接口，用于在本地检测时排除它们
+    local tunnel_interfaces='(wg-cf|warp|ts-|tailscale|tun)' 
+
+    # (已隐藏) printf "%b" "${C_CYAN}正在检测 Public IP (优先 curl IPv4)...${C_NC}\n"
+
+    # 1. 优先尝试 curl IPv4
+    IP=$(curl -s4 icanhazip.com)
+    [ -z "$IP" ] && IP=$(curl -s4 ifconfig.me/ip)
+    [ -z "$IP" ] && IP=$(curl -s4 api.ipify.org)
     
-    if [ -z "$IP" ]; then
-        printf "%b" "\n${C_YELLOW}警告: 无法自动获取服务器的 Public IPv6。${C_NC}\n"
-        printf "%b" "正在尝试获取 IPv4...\n"
-        # 降级尝试 IPv4
-        IP=$(curl -s4 icanhazip.com)
-        [ -z "$IP" ] && IP=$(curl -s4 ifconfig.me/ip)
+    if [ -n "$IP" ] && ! is_private_ip "$IP"; then
+        IP_TYPE="IPv4"
+    else
+        IP="" # 丢弃无效IP
     fi
     
+    # 2. 其次尝试 curl IPv6
     if [ -z "$IP" ]; then
-        printf "%b" "\n${C_RED}错误: 无法获取任何 Public IP (v4 或 v6)。${C_NC}\n"
-        printf "%b" "DNS 检查将被跳过。请手动确保您的域名指向正确。\n\n"
+        IP=$(curl -s6 icanhazip.com)
+        [ -z "$IP" ] && IP=$(curl -s6 ifconfig.me/ip)
+        [ -z "$IP" ] && IP=$(curl -s6 api.ipify.org)
+        
+        if [ -n "$IP" ] && ! is_private_ip "$IP"; then
+            IP_TYPE="IPv6"
+        else
+            IP="" # 丢弃无效IP
+        fi
     fi
+
+    # 3. 降级: 尝试本地 IPv4 (过滤隧道和私有IP)
+    if [ -z "$IP" ] && command -v ip > /dev/null; then
+        local local_ips
+        local_ips=$(ip -4 addr show scope global | grep -v -E " $tunnel_interfaces" | awk '/inet / {print $2}' | cut -d'/' -f1)
+        for local_ip in $local_ips; do
+            if ! is_private_ip "$local_ip"; then
+                IP="$local_ip"
+                IP_TYPE="IPv4"
+                break
+            fi
+        done
+    fi
+
+    # 4. 降级: 尝试本地 IPv6 (过滤隧道和私有IP)
+    if [ -z "$IP" ] && command -v ip > /dev/null; then
+        local local_ips
+        local_ips=$(ip -6 addr show scope global | grep -v -E " $tunnel_interfaces" | awk '/inet6/ {print $2}' | cut -d'/' -f1)
+        for local_ip in $local_ips; do
+            if ! is_private_ip "$local_ip"; then
+                IP="$local_ip"
+                IP_TYPE="IPv6"
+                break
+            fi
+        done
+    fi
+
     PUBLIC_IP="$IP"
     
-    # 在脚本的其余部分设置 IP 类型
-    IP_TYPE="IPv4"
-    if echo "$PUBLIC_IP" | grep -q '::'; then
-        IP_TYPE="IPv6"
-    fi
-    
-    if [ -n "$PUBLIC_IP" ]; then
-        printf "%b" "检测到 Public ${C_WHITE}$IP_TYPE${C_NC} : ${C_WHITE}$PUBLIC_IP${C_NC}\n"
+    if [ -z "$PUBLIC_IP" ]; then
+        printf "%b" "\n${C_RED}错误: 无法获取任何有效的 Public IP (v4 或 v6)。${C_NC}\n"
+        printf "%b" "${C_RED}所有 DNS 检查将被跳过。请手动确保您的域名指向正确。${C_NC}\n\n"
+    # else
+        # (已隐藏) printf "%b" "脚本将使用 ${C_WHITE}$IP_TYPE${C_NC} (${C_WHITE}$PUBLIC_IP${C_NC}) 进行 DNS 检查。\n"
     fi
 }
+
 
 check_caddy_installed() {
     if ! command -v caddy > /dev/null; then
@@ -82,7 +142,16 @@ check_caddy_installed() {
     return 0
 }
 
-# --- [V12.0 - 已修改] ---
+is_cloudflare_ip() {
+    local ip="$1"
+    # 检查 IPv4 和 IPv6 代理前缀
+    case "$ip" in
+        104.*|172.*|162.*|188.*) return 0 ;; # 0 = true (是 CF IP)
+        2a06:*|2a09:*) return 0 ;;
+        *) return 1 ;; # 1 = false
+    esac
+}
+
 check_dns() {
     domain=$1
     if [ -z "$PUBLIC_IP" ]; then
@@ -103,12 +172,17 @@ check_dns() {
             printf "%b" "${C_YELLOW}警告: 无法解析域名 $domain 的 AAAA 记录。${C_NC}\n"
             printf "%b" "请确保您已在 DNS 提供商处创建了 AAAA 记录。\n"
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        
+        elif is_cloudflare_ip "$domain_ip"; then
+            printf "%b" "${C_GREEN}DNS 提示: $domain (AAAA) 解析到 Cloudflare 代理 ($domain_ip)。${C_NC}\n"
+            printf "%b" "${C_GREEN}已假定 DNS 配置正确。${C_NC}\n"
+            return 0
+            
         elif [ "$domain_ip" != "$PUBLIC_IP" ]; then
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
             printf "%b" "${C_YELLOW}警告: DNS (AAAA) 记录不匹配！${C_NC}\n"
             printf "%b" "   - 域名 $domain 解析到: ${C_WHITE}$domain_ip${C_NC}\n"
-            printf "%b" "   - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
-            printf "%b" "注意: 如果您使用 Cloudflare 代理(橙色云)，这是正常的。\n"
+            printf "%b" "  - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
         else
             printf "%b" "${C_GREEN}DNS 检查通过: $domain (AAAA) 正确指向 $PUBLIC_IP.${C_NC}\n"
@@ -116,7 +190,7 @@ check_dns() {
         fi
 
     else
-        # 检查 A 记录 (原始逻辑)
+        # 检查 A 记录
         printf "%b" "${C_CYAN}正在检查 $domain 的 DNS A 记录...${C_NC}\n"
         domain_ip=$(getent hosts "$domain" | awk '!/::/ { print $1 }' | head -n 1)
         
@@ -124,11 +198,17 @@ check_dns() {
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
             printf "%b" "${C_YELLOW}警告: 无法解析域名 $domain 的 A 记录。${C_NC}\n"
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
+        
+        elif is_cloudflare_ip "$domain_ip"; then
+            printf "%b" "${C_GREEN}DNS 提示: $domain (A) 解析到 Cloudflare 代理 ($domain_ip)。${C_NC}\n"
+            printf "%b" "${C_GREEN}已假定 DNS 配置正确。${C_NC}\n"
+            return 0
+            
         elif [ "$domain_ip" != "$PUBLIC_IP" ]; then
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
             printf "%b" "${C_YELLOW}警告: DNS (A) 记录不匹配！${C_NC}\n"
             printf "%b" "   - 域名 $domain 解析到: ${C_WHITE}$domain_ip${C_NC}\n"
-            printf "%b" "   - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
+            printf "%b" "  - 本服务器的 Public IP 是: ${C_WHITE}$PUBLIC_IP${C_NC}\n"
             printf "%b" "${C_RED}******************************************************${C_NC}\n"
         else
             printf "%b" "${C_GREEN}DNS 检查通过: $domain (A) 正确指向 $PUBLIC_IP.${C_NC}\n"
@@ -196,7 +276,9 @@ setup_conf_d() {
         fi
 
         tee "$CADDYFILE_MAIN" > /dev/null << EOL
-
+# CaddyMan Main Config
+# Auto-generated by CaddyMan. Do not edit manually unless you know what you are doing.
+# All site configs are imported from conf.d/
 
 $IMPORT_LINE
 EOL
@@ -250,6 +332,7 @@ install_caddy() {
         caddy_was_installed=1
     fi
 
+    # 检查依赖: curl
     if ! command -v curl > /dev/null; then
         printf "%b" "${C_CYAN}正在安装 'curl' (依赖)...${C_NC}\n"
         if [ "$PKG_MANAGER" = "apt-get" ]; then
@@ -259,6 +342,27 @@ install_caddy() {
             apk add curl
         fi
     fi
+    
+    # 检查依赖: iproute2 (用于 'ip' 命令)
+    if ! command -v ip > /dev/null; then
+         printf "%b" "${C_CYAN}正在安装 'iproute2' (依赖)...${C_NC}\n"
+        if [ "$PKG_MANAGER" = "apt-get" ]; then
+            $PKG_MANAGER -qq install -y iproute2
+        elif [ "$PKG_MANAGER" = "apk" ]; then
+            apk add iproute2
+        fi
+    fi
+    
+    # 检查依赖: getent (用于 'getent')
+    if ! command -v getent > /dev/null; then
+         printf "%b" "${C_CYAN}正在安装 'libc-utils' 或 'dnsutils' (依赖)...${C_NC}\n"
+        if [ "$PKG_MANAGER" = "apt-get" ]; then
+            $PKG_MANAGER -qq install -y libc-bin
+        elif [ "$PKG_MANAGER" = "apk" ]; then
+            apk add libc-utils
+        fi
+    fi
+
 
     if [ "$caddy_was_installed" -eq 1 ]; then
         printf "%b" "\n${C_GREEN}Caddy 已经安装。${C_NC}\n"
@@ -376,14 +480,12 @@ uninstall_caddy() {
 
     printf "%b" "${C_CYAN}2. 正在卸载并清除 (purge) Caddy 软件包...${C_NC}\n"
     if [ "$PKG_MANAGER" = "apt-get" ]; then
-        # V11.9: --purge 会自动删除 /etc/caddy，解决了问题1
         $PKG_MANAGER -q remove --purge -y caddy > /dev/null
         printf "%b" "${C_CYAN}   - 正在清理 Caddy (apt) 仓库文件...${C_NC}\n"
         rm -f /etc/apt/sources.list.d/caddy-stable.list
         rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
         $PKG_MANAGER -qq update > /dev/null 2>&1
     elif [ "$PKG_MANAGER" = "apk" ]; then
-        # V11.9: apk del 默认就会清除配置
         apk del caddy > /dev/null
     fi
 
@@ -551,7 +653,7 @@ add_proxy() {
         fi
 
         local proxy_address="http://127.0.0.1:$proxy_port"
-        printf "%b" "  ${C_CYAN}+ 正在准备: ${C_WHITE}$domain${C_CYAN} -> ${C_WHITE}$proxy_address${C_NC}\n"
+        printf "%b" "   ${C_CYAN}+ 正在准备: ${C_WHITE}$domain${C_CYAN} -> ${C_WHITE}$proxy_address${C_NC}\n"
 
         tee "$config_file" > /dev/null << EOL
 $domain {
@@ -696,12 +798,12 @@ manage_sites_menu() {
 }
 
 
-# --- 主菜单 (V12.0 - IPv6 兼容) ---
+# --- 主菜单 (V15.0 - 修复NAT IP / 隐藏IP消息) ---
 main_menu() {
     while true; do
         printf "%b" "\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
-        printf "%b" " ${C_WHITE}   CaddyMan V12.0  ${C_NC}\n"
+        printf "%b" " ${C_WHITE}   CaddyMan V15.0  ${C_NC}\n"
         printf "%b" "${C_WHITE}===================================${C_NC}\n"
         printf "%b" " ${C_GREEN}1. 安装Caddy服务${C_NC}\n"
         printf "%b" " ${C_CYAN}2. 添加反向代理${C_NC}\n"
