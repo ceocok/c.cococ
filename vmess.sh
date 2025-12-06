@@ -4,7 +4,7 @@
 set -e
 
 # --- 配置变量 ---
-XRAY_VERSION="1.8.4"
+XRAY_VERSION="25.12.2"
 CERT_DIR="/root/coca"
 XRAY_BIN="/usr/local/bin/xray"
 SYSTEMD_FILE="/etc/systemd/system/xray.service"
