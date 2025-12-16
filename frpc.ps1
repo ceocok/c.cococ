@@ -1,27 +1,3 @@
-<#
-.SYNOPSIS
-    A PowerShell script to deploy frpc as a Windows service using a proxied, direct download for NSSM.
-.DESCRIPTION
-    This custom-tailored script uses a proxy for all GitHub downloads and fetches nssm.exe directly
-    from a user-provided URL. It properly uses NSSM to wrap frpc.exe as a robust, auto-restarting
-    Windows service. Includes defaults for common settings like server address, proxy name, local IP, and local port.
-.AUTHOR
-    Generated based on a request.
-.VERSION
-    5.2 (Interactive LocalIP with Default)
-.USAGE
-    To run interactively from web:
-    powershell -ExecutionPolicy Bypass -Command "iex ((New-Object System.Net.WebClient).DownloadString('https://gh.cococ.co/https://raw.githubusercontent.com/ceocok/c.cococ/refs/heads/main/frpc.ps1'))"
-
-    To run locally:
-    .\frpc.ps1
-.LINK
-    https://github.com/ceocok/c.cococ/
-#>
-
-#requires -RunAsAdministrator
-
-#region Script Configuration and Initialization
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false, HelpMessage = "Directly perform an action without showing the menu.")]
