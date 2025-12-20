@@ -8,24 +8,21 @@ XRAY_VERSION="25.12.2"
 CERT_DIR="/root/coca"
 XRAY_BIN="/usr/local/bin/xray"
 SYSTEMD_FILE="/etc/systemd/system/xray.service"
-OPENRC_FILE="/etc/init.d/xray" # 新增：Alpine OpenRC 脚本路径
+OPENRC_FILE="/etc/init.d/xray"
 CONFIG_FILE="/etc/xray/config.json"
 WS_PATH="/ws"
 
-# --- 辅助函数 (已移除颜色代码) ---
-green() { echo "$1"; }
-red() { echo "$1"; }
-yellow() { echo "$1"; }
+# --- 辅助函数 ---
+green() { echo -e "\033[32m$1\033[0m"; }
+red() { echo -e "\033[31m$1\033[0m"; }
+yellow() { echo -e "\033[33m$1\033[0m"; }
 
-# --- 按需安装依赖的核心函数 ---
-
-# 定义全局变量用于存储包管理器信息
+# --- 检测包管理器 ---
 PKG_MANAGER=""
 INSTALL_CMD=""
 UPDATE_CMD=""
-DEPS_UPDATED="" # 标志位，防止重复更新
+DEPS_UPDATED=""
 
-# 检测包管理器
 detect_pkg_manager() {
     if command -v apt-get >/dev/null 2>&1; then
         PKG_MANAGER="apt"
@@ -46,20 +43,11 @@ detect_pkg_manager() {
     fi
 }
 
-# 确保命令可用，如果不可用则尝试安装
 ensure_command() {
     local cmd="$1"
-    if command -v "$cmd" >/dev/null 2>&1; then
-        return 0 # 命令已存在，直接返回
-    fi
-
+    if command -v "$cmd" >/dev/null 2>&1; then return 0; fi
     yellow "⏳ 命令 '$cmd' 未找到，正在尝试安装..."
-    
-    if [ -z "$PKG_MANAGER" ]; then
-        red "❌ 无法检测到有效的包管理器 (apt, yum, dnf, apk)。"
-        red "❌ 请手动安装 '$cmd' 后再重新运行脚本。"
-        exit 1
-    fi
+    if [ -z "$PKG_MANAGER" ]; then red "❌ 无法检测到包管理器"; exit 1; fi
 
     local pkg_name
     case "$cmd" in
@@ -70,36 +58,63 @@ ensure_command() {
         openssl) pkg_name="openssl" ;;
         crontab) [ "$PKG_MANAGER" = "apk" ] && pkg_name="busybox-extras" || ([ "$PKG_MANAGER" = "apt" ] && pkg_name="cron" || pkg_name="cronie") ;;
         fuser) pkg_name="psmisc" ;;
-        *)
-            red "❌ 内部错误：无法确定命令 '$cmd' 对应的软件包名。"
-            exit 1
-            ;;
+        *) red "❌ 未知命令 '$cmd'"; exit 1 ;;
     esac
 
-    if [ -z "$DEPS_UPDATED" ]; then
-        echo "➡️ 首次安装依赖，正在更新软件包列表..."
-        $UPDATE_CMD >/dev/null 2>&1
-        DEPS_UPDATED="true"
-    fi
-
-    if [ "$pkg_name" = "jq" ] && { [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; }; then
-         $INSTALL_CMD epel-release >/dev/null 2>&1 || true
-    fi
-
+    if [ -z "$DEPS_UPDATED" ]; then $UPDATE_CMD >/dev/null 2>&1; DEPS_UPDATED="true"; fi
+    if [ "$pkg_name" = "jq" ] && { [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; }; then $INSTALL_CMD epel-release >/dev/null 2>&1 || true; fi
     $INSTALL_CMD "$pkg_name"
-
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        red "❌ 安装软件包 '$pkg_name' 失败，或安装后 '$cmd' 命令依然不可用。"
-        red "❌ 请检查以上错误信息并手动安装后重试。"
-        exit 1
-    fi
-    green "✅ 命令 '$cmd' 已成功安装。"
 }
-
 
 # --- 功能函数 ---
 
-# 显示 VMess 配置信息和链接
+# 1. 查看运行状态 (新增)
+check_status() {
+    echo "--------------------------------------"
+    if systemctl --version >/dev/null 2>&1; then
+        if systemctl is-active --quiet xray; then
+            green "● Xray 运行状态: 正在运行 (systemd)"
+        else
+            red "● Xray 运行状态: 已停止 (systemd)"
+        fi
+        systemctl status xray --no-pager | grep -E "Active:|Main PID:" || true
+    elif rc-service --version >/dev/null 2>&1; then
+        if rc-service -e xray; then
+            green "● Xray 运行状态: 正在运行 (OpenRC)"
+        else
+            red "● Xray 运行状态: 已停止 (OpenRC)"
+        fi
+    else
+        if pgrep -f "$XRAY_BIN" >/dev/null; then
+            green "● Xray 运行状态: 正在运行 (PID: $(pgrep -f "$XRAY_BIN"))"
+        else
+            red "● Xray 运行状态: 未运行 (nohup)"
+        fi
+    fi
+    echo "--------------------------------------"
+}
+
+# 2. 重启 Xray (优化原有并整合)
+restart_xray() {
+    echo "➡️ 正在重启 Xray 服务..."
+    if systemctl --version >/dev/null 2>&1; then
+        systemctl restart xray
+        sleep 2
+        systemctl is-active --quiet xray && green "✅ 重启成功" || red "❌ 重启失败"
+    elif rc-service --version >/dev/null 2>&1; then
+        rc-service xray restart
+        sleep 2
+        rc-service -e xray && green "✅ 重启成功" || red "❌ 重启失败"
+    else
+        pkill -f "$XRAY_BIN" || true
+        sleep 1
+        nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
+        sleep 2
+        pgrep -f "$XRAY_BIN" >/dev/null && green "✅ 重启成功" || red "❌ 重启失败"
+    fi
+}
+
+# 3. 显示链接
 show_vmess_link() {
   [ ! -f "$CONFIG_FILE" ] && red "❌ 未找到 Xray 配置文件" && exit 1
   ensure_command "jq"
@@ -107,492 +122,142 @@ show_vmess_link() {
   DOMAIN=$(jq -r '.inbounds[0].streamSettings.tlsSettings.certificates[0].certificateFile' "$CONFIG_FILE" | sed 's/.*\///;s/\.cer//')
   PORT=$(jq -r '.inbounds[0].port' "$CONFIG_FILE")
   local vmess_json=$(cat <<EOF
-{
-  "v": "2",
-  "ps": "${DOMAIN}-vmess",
-  "add": "$DOMAIN",
-  "port": "$PORT",
-  "id": "$UUID",
-  "aid": "0",
-  "net": "ws",
-  "type": "none",
-  "host": "$DOMAIN",
-  "path": "$WS_PATH",
-  "tls": "tls"
-}
+{ "v": "2", "ps": "${DOMAIN}-vmess", "add": "$DOMAIN", "port": "$PORT", "id": "$UUID", "aid": "0", "net": "ws", "type": "none", "host": "$DOMAIN", "path": "$WS_PATH", "tls": "tls" }
 EOF
 )
   local vmess_link="vmess://$(echo "$vmess_json" | base64 -w 0)"
-  echo
+  echo ""
   green "🎉 VMess 配置信息如下："
-  echo "======================================"
-  echo " 地址 (Address): $DOMAIN"
-  echo " 端口 (Port): $PORT"
-  echo " 用户ID (UUID): $UUID"
-  echo " 额外ID (AlterId): 0"
-  echo " 加密方式 (Security): auto"
-  echo " 传输协议 (Network): ws"
-  echo " WebSocket 路径 (Path): $WS_PATH"
-  echo " SNI / 伪装域名 (Host): $DOMAIN"
-  echo " 底层传输安全 (TLS): tls"
-  echo " 证书路径 (服务器端): $CERT_DIR/${DOMAIN}.cer"
-  echo "======================================"
-  green "VMess 链接 (复制并导入到客户端):"
+  echo " 地址: $DOMAIN | 端口: $PORT | UUID: $UUID"
+  green "VMess 链接:"
   echo "$vmess_link"
-  echo "======================================"
-  exit 0
 }
 
-# 停止 Xray
-stop_xray() {
-    if systemctl --version >/dev/null 2>&1; then
-        systemctl stop xray || true
-    elif rc-service --version >/dev/null 2>&1; then # 新增: Alpine 停止方式
-        rc-service xray stop || true
-    else
-        pkill -f "$XRAY_BIN" || true
-    fi
-}
-
-# (******************* 新增功能 *******************)
-# 重启 Xray
-restart_xray() {
-    echo "➡️ 正在重启 Xray 服务..."
-    if systemctl --version >/dev/null 2>&1; then
-        systemctl restart xray
-        sleep 2
-        if ! systemctl is-active --quiet xray; then
-            red "❌ Xray (systemd) 重启失败，请检查配置或日志 'journalctl -u xray'。"
-            return 1
-        fi
-    elif rc-service --version >/dev/null 2>&1; then
-        rc-service xray restart
-        sleep 2
-        if ! rc-service -e xray; then
-            red "❌ Xray (OpenRC) 重启失败，请检查配置。"
-            return 1
-        fi
-    else
-        yellow "⚠️ 正在使用 nohup 模式重启 (pkill + start)..."
-        pkill -f "$XRAY_BIN" || true
-        sleep 1
-        nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
-        sleep 2
-        if ! pgrep -f "$XRAY_BIN" >/dev/null; then
-            red "❌ Xray (nohup) 重启失败，请检查配置。"
-            return 1
-        fi
-    fi
-    green "✅ Xray 服务已成功重启。"
-    return 0
-}
-
-# 修改端口
+# 4. 修改端口
 modify_port() {
-    echo "➡️ 准备修改 Xray 监听端口..."
-    [ ! -f "$CONFIG_FILE" ] && red "❌ 未找到 Xray 配置文件: $CONFIG_FILE" && exit 1
     ensure_command "jq"
-
-    local current_port
-    current_port=$(jq -r '.inbounds[0].port' "$CONFIG_FILE")
-    if [ -z "$current_port" ]; then
-        red "❌ 无法从 $CONFIG_FILE 中读取当前端口。"
-        exit 1
-    fi
-
-    echo "当前监听端口为: $current_port"
-    echo -n "请输入新的监听端口 (1-65535): "
+    local current_port=$(jq -r '.inbounds[0].port' "$CONFIG_FILE")
+    echo -n "当前端口 $current_port，请输入新端口: "
     read -r new_port
-
-    # 验证新端口
     if ! echo "$new_port" | grep -Eq '^[0-9]+$' || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-        red "❌ 端口 '$new_port' 无效。请输入 1-65535 之间的数字。"
-        exit 1
+        red "❌ 无效端口"; exit 1
     fi
-
-    if [ "$new_port" = "$current_port" ]; then
-        yellow "⚠️ 新端口与当前端口相同 ($current_port)，未做任何更改。"
-        exit 0
-    fi
-
-    # 检查新端口是否被占用
-    ensure_command "fuser"
-    if fuser "$new_port/tcp" >/dev/null 2>&1; then
-        yellow "⚠️ 警告：端口 $new_port 似乎已被其他进程占用。脚本将继续尝试..."
-    fi
-
-    echo "⏳ 正在将端口 $current_port 修改为 $new_port..."
-    
-    local tmp_file
-    tmp_file=$(mktemp)
-    # 使用 jq 修改配置。使用 --argjson 传递数字更安全
-    if ! jq --argjson newport "$new_port" '.inbounds[0].port = $newport' "$CONFIG_FILE" > "$tmp_file"; then
-        red "❌ 使用 jq 修改配置文件失败。"
-        rm -f "$tmp_file"
-        exit 1
-    fi
-    mv -f "$tmp_file" "$CONFIG_FILE"
-
-    green "✅ 配置文件已更新。"
-
-    if restart_xray; then
-        green "🎉 端口修改成功！"
-        # 显示新的配置信息
-        show_vmess_link
-    else
-        red "❌ 服务重启失败。配置可能已更新，但服务未启动。"
-        red "❌ 正在尝试回滚端口更改..."
-        # 尝试回滚
-        jq --argjson oldport "$current_port" '.inbounds[0].port = $oldport' "$CONFIG_FILE" > "$tmp_file" 2>/dev/null
-        mv -f "$tmp_file" "$CONFIG_FILE" 2>/dev/null
-        red "端口已尝试回滚至 $current_port。请手动检查服务状态。"
-        exit 1
-    fi
-    exit 0 # 确保在 show_vmess_link 之后退出
-}
-# (***************** 新增功能结束 *****************)
-
-
-# 核心卸载逻辑（用于重新安装），保留证书和crontab
-uninstall_for_reinstall() {
-  echo "➡️ 正在停止并删除 Xray 程序及配置..."
-  stop_xray
-  if [ -f "$SYSTEMD_FILE" ]; then
-    systemctl disable xray >/dev/null 2>&1 || true
-    rm -f "$SYSTEMD_FILE"
-  fi
-  if [ -f "$OPENRC_FILE" ]; then # 新增: Alpine 卸载服务
-    rc-update del xray default >/dev/null 2>&1 || true
-    rm -f "$OPENRC_FILE"
-  fi
-  rm -rf "$XRAY_BIN" /etc/xray
-  green "✅ Xray 程序和配置已删除，证书和续期任务已保留。"
+    jq --argjson newport "$new_port" '.inbounds[0].port = $newport' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    restart_xray
+    show_vmess_link
 }
 
-# 完整卸载功能（菜单选项3），删除所有相关文件
+# 5. 卸载相关
+stop_xray() {
+    if systemctl --version >/dev/null 2>&1; then systemctl stop xray || true
+    elif rc-service --version >/dev/null 2>&1; then rc-service xray stop || true
+    else pkill -f "$XRAY_BIN" || true; fi
+}
+
 uninstall_xray() {
-    yellow "⚠️ 警告：此操作将彻底删除 Xray 及其配置文件、证书和定时任务。"
-    echo -n "您确定要卸载 Xray 吗? [Y/N]: "
-    read -r confirm_uninstall
-    if [ "$confirm_uninstall" != "y" ] && [ "$confirm_uninstall" != "Y" ]; then
-        echo "操作已取消。"
-        exit 0
-    fi
-
-    echo "➡️ 正在停止并卸载 Xray..."
+    yellow "⚠️ 确认卸载 Xray 及其所有配置？ [y/N]"; read -r confirm
+    [ "$confirm" != "y" ] && exit 0
     stop_xray
-
-    if [ -f "$SYSTEMD_FILE" ]; then
-        echo "➡️ 正在禁用并删除 systemd 服务..."
-        systemctl disable xray >/dev/null 2>&1 || true
-        rm -f "$SYSTEMD_FILE"
-        systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
-
-    if [ -f "$OPENRC_FILE" ]; then # 新增: Alpine 完全卸载
-        echo "➡️ 正在禁用并删除 OpenRC 服务..."
-        rc-update del xray default >/dev/null 2>&1 || true
-        rm -f "$OPENRC_FILE"
-    fi
-
-    echo "➡️ 正在删除 Xray 程序及配置目录..."
-    rm -rf "$XRAY_BIN" /etc/xray
-
-    echo "➡️ 正在删除证书目录 $CERT_DIR..."
-    rm -rf "$CERT_DIR"
-
-    echo "➡️ 正在从 crontab 中删除续期任务..."
-    ensure_command "crontab"
-    (crontab -l 2>/dev/null | grep -Fv "acme.sh --cron") | crontab - >/dev/null 2>&1
-
-    green "✅ Xray 核心组件、证书及续期任务已删除。"
-
-    echo -n "❓ 是否要同时卸载 acme.sh 证书申请工具? (这将删除 /root/.acme.sh) [Y/N]: "
-    read -r confirm_acme
-    if [ "$confirm_acme" = "y" ] || [ "$confirm_acme" = "Y" ]; then
-        echo "➡️ 正在卸载 acme.sh..."
-        /root/.acme.sh/acme.sh --uninstall >/dev/null 2>&1 || true
-        rm -rf /root/.acme.sh
-        green "✅ acme.sh 已卸载。"
-    fi
-    green "🎉 卸载完成。"
+    [ -f "$SYSTEMD_FILE" ] && (systemctl disable xray; rm -f "$SYSTEMD_FILE")
+    [ -f "$OPENRC_FILE" ] && (rc-update del xray; rm -f "$OPENRC_FILE")
+    rm -rf "$XRAY_BIN" /etc/xray "$CERT_DIR"
+    green "✅ 已彻底卸载"
     exit 0
 }
 
-# (******************* 修改菜单 *******************)
-# 如果已安装 Xray，显示此菜单
+# --- 菜单控制 ---
 menu_if_installed() {
-  green "❗ 检测到 Xray 已安装，请选择操作："
+  check_status
+  green "请选择操作："
   echo "   1) 显示 VMess 配置和链接"
-  echo "   2) 重新安装 Xray (保留证书)"
-  echo "   3) 彻底卸载 Xray (删除证书)"
-  echo "   4) 修改 Xray 监听端口" # <-- 新增选项
-  echo -n "请输入选项 [1-4]，按 Enter 键: " # <-- 修改范围
+  echo "   2) 重启 Xray 服务"
+  echo "   3) 修改监听端口"
+  echo "   4) 重新安装 Xray (保留证书)"
+  echo "   5) 彻底卸载 Xray"
+  echo "   0) 退出脚本"
+  echo -n "请输入选项 [0-5]: "
   read -r option
   case "$option" in
     1) show_vmess_link ;;
-    2)
-      uninstall_for_reinstall
-      echo "✅ 旧版本已卸载，即将开始重新安装..."
-      ;;
-    3)
-      uninstall_xray
-      ;;
-    4) 
-      modify_port # <-- 新增 case
-      ;;
+    2) restart_xray ;;
+    3) modify_port ;;
+    4) stop_xray; rm -rf "$XRAY_BIN" /etc/xray; echo "➡️ 准备重新安装..."; return 0 ;;
+    5) uninstall_xray ;;
+    0) exit 0 ;;
     *) red "❌ 无效选项" && exit 1 ;;
   esac
+  exit 0
 }
-# (***************** 菜单修改结束 *****************)
 
-# 安装 Xray 核心文件
+# --- 核心安装逻辑 ---
 install_xray_core() {
   mkdir -p /etc/xray
-  [ -f "$XRAY_BIN" ] && rm -f "$XRAY_BIN"
-
-  ensure_command "curl"
-  ensure_command "unzip"
-  
-  echo "➡️ 正在下载并安装 Xray v${XRAY_VERSION}..."
-  ARCH=$(uname -m)
-  case "$ARCH" in
-    x86_64) XRAY_ARCH="64" ;;
-    aarch64) XRAY_ARCH="arm64-v8a" ;;
-    *) red "❌ 不支持的系统架构: $ARCH"; exit 1 ;;
-  esac
-  
+  ensure_command "curl"; ensure_command "unzip"
+  ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && XRAY_ARCH="64" || XRAY_ARCH="arm64-v8a"
   curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-${XRAY_ARCH}.zip"
-  unzip -o xray.zip -d /tmp/xray
-  mv -f /tmp/xray/xray "$XRAY_BIN"
-  chmod +x "$XRAY_BIN"
-  mv -f /tmp/xray/geo* /etc/xray/
-  rm -rf xray.zip /tmp/xray
-  green "✅ Xray 安装成功。"
+  unzip -o xray.zip -d /tmp/xray && mv -f /tmp/xray/xray "$XRAY_BIN" && chmod +x "$XRAY_BIN"
+  mv -f /tmp/xray/geo* /etc/xray/ && rm -rf xray.zip /tmp/xray
 }
 
-# 获取用户输入
-get_user_input() {
-  echo -n "请输入你的域名（必须已解析到本服务器 IP）: "
-  read -r DOMAIN
-  [ -z "$DOMAIN" ] && red "❌ 域名不能为空！" && exit 1
-  echo -n "请输入监听端口 [默认: 443]: "
-  read -r PORT
-  [ -z "$PORT" ] && PORT=443
-  UUID=$(cat /proc/sys/kernel/random/uuid)
-}
-
-# 申请证书
 issue_cert() {
-  ensure_command "curl"
-  ensure_command "socat"
-  
-  if [ ! -f /root/.acme.sh/acme.sh ]; then
-    echo "➡️ 正在安装 acme.sh..."
-    curl https://get.acme.sh | sh
-  fi
-  # shellcheck source=/root/.acme.sh/acme.sh.env
+  ensure_command "curl"; ensure_command "socat"; ensure_command "crontab"
+  [ ! -f /root/.acme.sh/acme.sh ] && curl https://get.acme.sh | sh
   . ~/.acme.sh/acme.sh.env
-
-  echo "➡️ 正在设置默认 CA 为 Let's Encrypt 以提高兼容性..."
   ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-
-  echo "➡️ 正在基于 Let's Encrypt 注册 ACME 账户..."
-  ~/.acme.sh/acme.sh --register-account -m "myemail@${DOMAIN}"
-
-  ACME_LISTEN_PARAM=""
-  if curl -s -6 -m 10 "ifconfig.co" >/dev/null 2>&1; then
-    green "✅ 检测到 IPv6 网络，将优先使用 IPv6 进行证书申请"
-    ACME_LISTEN_PARAM="--listen-v6"
-  elif curl -s -4 -m 10 "ifconfig.co" >/dev/null 2>&1; then
-    green "✅ 检测到 IPv4 网络，将使用 IPv4 进行证书申请"
-    ACME_LISTEN_PARAM="--listen-v4"
-  else
-    red "❌ 无法检测到有效的公网 IP (IPv4 或 IPv6)，请检查网络连接。证书申请无法继续。"
-    exit 1
-  fi
-  
-  echo "➡️ 正在停止 80 端口服务，以确保证书申请成功..."
-  ensure_command "fuser"
-  fuser -k 80/tcp >/dev/null 2>&1 || true
-  sleep 1
-
-  echo "➡️ 正在为 $DOMAIN 申请 Let's Encrypt 证书..."
-  ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone $ACME_LISTEN_PARAM --keylength ec-256 || return 1
-  
-  ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-    --ecc \
-    --key-file "$CERT_DIR/${DOMAIN}.key" \
-    --fullchain-file "$CERT_DIR/${DOMAIN}.cer" \
+  ~/.acme.sh/acme.sh --register-account -m "admin@${DOMAIN}"
+  ensure_command "fuser"; fuser -k 80/tcp >/dev/null 2>&1 || true
+  ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 || return 1
+  ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+    --key-file "$CERT_DIR/${DOMAIN}.key" --fullchain-file "$CERT_DIR/${DOMAIN}.cer" \
     --reloadcmd "rc-service xray restart >/dev/null 2>&1 || systemctl restart xray >/dev/null 2>&1 || pkill -f xray"
-  
-  echo "➡️ 正在设置证书自动续期任务..."
-  ensure_command "crontab"
-  (crontab -l 2>/dev/null | grep -Fv "acme.sh --cron") | crontab - >/dev/null 2>&1
-  (crontab -l 2>/dev/null; echo "0 3 * * * /root/.acme.sh/acme.sh --cron --home /root/.acme.sh > /dev/null 2>&1") | crontab - >/dev/null 2>&1
-
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now cronie >/dev/null 2>&1
-  elif command -v rc-update >/dev/null 2>&1; then # 新增: Alpine 启动 crond 服务
-    rc-update add crond default >/dev/null 2>&1
-    rc-service crond start >/dev/null 2>&1
-  fi
 }
 
-# 生成自签名证书（备用方案）
-generate_self_signed_cert() {
-  red "⚠️ ACME 证书申请失败，将使用自签证书..."
-  ensure_command "openssl"
-  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout "$CERT_DIR/${DOMAIN}.key" -out "$CERT_DIR/${DOMAIN}.cer" \
-    -subj "/CN=$DOMAIN"
-  green "✅ 自签证书已生成。"
-}
-
-# 生成 Xray 配置文件
-generate_config() {
-  cat > "$CONFIG_FILE" <<EOF
-{
-  "log": {
-      "loglevel": "warning"
-  },
-  "inbounds": [{
-    "port": $PORT,
-    "protocol": "vmess",
-    "settings": {
-      "clients": [{
-        "id": "$UUID"
-      }]
-    },
-    "streamSettings": {
-      "network": "ws",
-      "security": "tls",
-      "tlsSettings": {
-        "certificates": [{
-          "certificateFile": "$CERT_DIR/${DOMAIN}.cer",
-          "keyFile": "$CERT_DIR/${DOMAIN}.key"
-        }]
-      },
-      "wsSettings": {
-        "path": "$WS_PATH"
-      }
-    }
-  }],
-  "outbounds": [{
-    "protocol": "freedom",
-    "settings": {}
-  }]
-}
-EOF
-  green "✅ 配置文件已生成。"
-}
-
-# ***************************************************************
-# ***                      核心修改部分                       ***
-# ***************************************************************
-
-# 创建并启动 systemd/openrc/nohup 服务
 setup_and_start_xray() {
-  # 1. 检查是否为 systemd 系统
   if command -v systemctl >/dev/null 2>&1; then
-      echo "➡️ 检测到 systemd，正在创建并启动 systemd 服务..."
-      cat > "$SYSTEMD_FILE" <<EOF
+    cat > "$SYSTEMD_FILE" <<EOF
 [Unit]
 Description=Xray Service
-Documentation=https://github.com/xtls
-After=network.target nss-lookup.target
-
+After=network.target
 [Service]
-User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
 ExecStart=$XRAY_BIN run -c $CONFIG_FILE
 Restart=on-failure
-RestartPreventExitStatus=23
-
 [Install]
 WantedBy=multi-user.target
 EOF
-      systemctl daemon-reload
-      systemctl enable xray
-      systemctl start xray
-      sleep 2
-      if systemctl is-active --quiet xray; then
-          green "✅ Xray (systemd) 启动并已设置为开机自启。"
-      else
-          red "❌ Xray (systemd) 启动失败，请运行 'journalctl -u xray --no-pager -l' 查看日志。"
-          exit 1
-      fi
-  # 2. 检查是否为 Alpine (OpenRC) 系统
+    systemctl daemon-reload && systemctl enable xray && systemctl start xray
   elif command -v rc-update >/dev/null 2>&1; then
-      echo "➡️ 检测到 OpenRC (Alpine)，正在创建并启动 OpenRC 服务..."
-      # 创建 init 脚本
-      cat > "$OPENRC_FILE" <<EOF
+    cat > "$OPENRC_FILE" <<EOF
 #!/sbin/openrc-run
-description="Xray Service"
 supervisor=supervise-daemon
-
 command="$XRAY_BIN"
 command_args="run -c $CONFIG_FILE"
-pidfile="/run/\${RC_SVCNAME}.pid"
-
-depend() {
-    need net
-    after net
-}
 EOF
-      chmod +x "$OPENRC_FILE"
-      rc-update add xray default # 添加到默认运行级别（实现开机自启）
-      rc-service xray start      # 启动服务
-      sleep 2
-      if rc-service -e xray; then
-          green "✅ Xray (OpenRC) 启动并已设置为开机自启。"
-      else
-          red "❌ Xray (OpenRC) 启动失败，请检查配置文件 '$CONFIG_FILE'。"
-          exit 1
-      fi
-  # 3. 回退到 nohup (无自启)
+    chmod +x "$OPENRC_FILE" && rc-update add xray default && rc-service xray start
   else
-      yellow "⚠️ 未检测到 systemd 或 OpenRC，将使用 nohup 启动 (无法开机自启)。"
-      nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
-      sleep 2
-      if pgrep -f "$XRAY_BIN" >/dev/null; then
-          green "✅ Xray (nohup) 启动成功！"
-      else
-          red "❌ Xray (nohup) 启动失败，请检查配置。"
-          exit 1
-      fi
+    nohup "$XRAY_BIN" run -c "$CONFIG_FILE" > /dev/null 2>&1 &
   fi
+  green "✅ 启动指令已发出"
 }
 
-# --- 主函数 ---
 main() {
   detect_pkg_manager
+  [ -f "$XRAY_BIN" ] && menu_if_installed
 
-  if [ -f "$XRAY_BIN" ]; then
-    menu_if_installed
-  fi
+  echo -n "请输入你的域名: "; read -r DOMAIN
+  echo -n "请输入监听端口 [默认443]: "; read -r PORT; [ -z "$PORT" ] && PORT=443
+  UUID=$(cat /proc/sys/kernel/random/uuid)
 
-  get_user_input
   install_xray_core
-
   mkdir -p "$CERT_DIR"
-  if [ -f "$CERT_DIR/${DOMAIN}.key" ] && [ -f "$CERT_DIR/${DOMAIN}.cer" ]; then
-      green "✅ 检测到域名 $DOMAIN 的现有证书，将直接使用。"
-  else
-      yellow "⚠️ 未找到 $DOMAIN 的证书，开始申请新证书..."
-      if issue_cert; then
-          green "✅ 证书申请及安装成功。"
-      else
-          generate_self_signed_cert
-      fi
+  if [ ! -f "$CERT_DIR/${DOMAIN}.cer" ]; then
+    issue_cert || (red "⚠️ 申请失败，生成自签证书"; ensure_command "openssl"; openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout "$CERT_DIR/${DOMAIN}.key" -out "$CERT_DIR/${DOMAIN}.cer" -subj "/CN=$DOMAIN")
   fi
 
-  generate_config
+  cat > "$CONFIG_FILE" <<EOF
+{ "log": {"loglevel": "warning"}, "inbounds": [{ "port": $PORT, "protocol": "vmess", "settings": { "clients": [{ "id": "$UUID" }] }, "streamSettings": { "network": "ws", "security": "tls", "tlsSettings": { "certificates": [{ "certificateFile": "$CERT_DIR/${DOMAIN}.cer", "keyFile": "$CERT_DIR/${DOMAIN}.key" }] }, "wsSettings": { "path": "$WS_PATH" } } }], "outbounds": [{ "protocol": "freedom", "settings": {} }] }
+EOF
   setup_and_start_xray
   show_vmess_link
 }
 
-# --- 脚本入口 ---
 main "$@"
