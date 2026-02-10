@@ -1,7 +1,4 @@
 #!/bin/bash
-# sing-box 简化脚本 - 完整版 | VMess+WS+TLS
-# 功能：支持自定义对外端口，隐藏本地端口，安装后自动显示链接
-
 set -e
 red='\e[31m'; yellow='\e[33m'; green='\e[92m'; blue='\e[94m'; none='\e[0m'
 _red() { echo -e ${red}$@${none}; }
@@ -36,7 +33,7 @@ case $(uname -m) in
     *) _err "仅支持 64 位" ;;
 esac
 
-# 路径
+# 路径定义
 CORE=sing-box
 CORE_DIR=/etc/$CORE
 CORE_BIN=$CORE_DIR/bin/$CORE
@@ -47,6 +44,7 @@ CORE_REPO=SagerNet/$CORE
 CADDY_BIN=/usr/local/bin/caddy
 CADDY_DIR=/etc/caddy
 CADDY_CONF=$CADDY_DIR/sing-box
+CADDY_CONF_D=$CADDY_DIR/conf.d
 CADDYFILE=$CADDY_DIR/Caddyfile
 CONFIG_JSON=$CORE_DIR/config.json
 
@@ -54,22 +52,43 @@ CONFIG_JSON=$CORE_DIR/config.json
 installed() { [[ -f $CORE_BIN && -d $CONF_DIR ]]; }
 
 # 服务控制
-_svc_start() { [[ $use_systemd -eq 1 ]] && systemctl start $CORE caddy || { /etc/init.d/$CORE start 2>/dev/null; /etc/init.d/caddy start 2>/dev/null; }; }
-_svc_stop() { [[ $use_systemd -eq 1 ]] && systemctl stop $CORE caddy || { /etc/init.d/$CORE stop 2>/dev/null; /etc/init.d/caddy stop 2>/dev/null; }; }
-_svc_restart() { [[ $use_systemd -eq 1 ]] && systemctl restart $CORE caddy || { _svc_stop; sleep 1; _svc_start; }; }
-_svc_status() { [[ $use_systemd -eq 1 ]] && systemctl status $CORE caddy --no-pager 2>/dev/null || (rc-status 2>/dev/null | grep -E "caddy|sing-box" || true); }
+_svc_start() { 
+    [[ $use_systemd -eq 1 ]] && systemctl start $CORE caddy 2>/dev/null || { /etc/init.d/$CORE start 2>/dev/null; /etc/init.d/caddy start 2>/dev/null; }; 
+}
+_svc_stop() { 
+    [[ $use_systemd -eq 1 ]] && systemctl stop $CORE caddy 2>/dev/null || { /etc/init.d/$CORE stop 2>/dev/null; /etc/init.d/caddy stop 2>/dev/null; }; 
+}
+_svc_restart() { 
+    [[ $use_systemd -eq 1 ]] && systemctl restart $CORE caddy 2>/dev/null || { _svc_stop; sleep 1; _svc_start; }; 
+}
+_svc_status() { 
+    [[ $use_systemd -eq 1 ]] && systemctl status $CORE caddy --no-pager 2>/dev/null || (rc-status 2>/dev/null | grep -E "caddy|sing-box" || true); 
+}
 
-# 获取特定域名的对外端口 (从 Caddy 配置中提取)
+# 获取对外端口 (兼容独立文件和 conf.d 文件)
 _get_ext_port() {
     local host=$1
-    local port=$(grep -oE "${host}:[0-9]+" $CADDY_CONF/$host.conf 2>/dev/null | cut -d: -f2)
+    local port
+    if [[ -f $CADDY_CONF_D/${host}.caddy ]]; then
+        port=$(grep -oE "${host}:[0-9]+" $CADDY_CONF_D/${host}.caddy | cut -d: -f2)
+    elif [[ -f $CADDY_CONF/$host.conf ]]; then
+        port=$(grep -oE "${host}:[0-9]+" $CADDY_CONF/$host.conf | cut -d: -f2)
+    fi
     echo ${port:-443}
 }
 
 # ============ 安装 ============
 do_install() {
     [[ -f $BIN && installed ]] && _err "已安装, 重装请先: sb uninstall"
-    echo -e "\n${green}===== sing-box 简化安装 =====${none}\n"
+    
+    # 检测 Caddy 模式
+    local caddy_mode="standalone"
+    if type -P caddy &>/dev/null; then
+        caddy_mode="existing"
+        [[ -d $CADDY_CONF_D ]] && _yellow "检测到现有 Caddy 且存在 conf.d 目录，将采用共存模式。"
+    fi
+
+    echo -e "\n${green}===== sing-box 终极整合安装 =====${none}\n"
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -85,7 +104,7 @@ do_install() {
         $cmd install -y wget tar jq 2>/dev/null || true
     fi
     
-    mkdir -p $CORE_DIR/bin $CONF_DIR $LOG_DIR $CADDY_DIR/sites $CADDY_CONF
+    mkdir -p $CORE_DIR/bin $CONF_DIR $LOG_DIR
     
     # 核心下载
     if [[ $core_file ]]; then
@@ -99,15 +118,17 @@ do_install() {
     fi
     chmod +x $CORE_BIN
 
-    # Caddy 下载
-    echo "下载 Caddy..."
-    caddy_ver=$(_wget -qO- "https://api.github.com/repos/caddyserver/caddy/releases/latest" 2>/dev/null | grep -oE '"tag_name": "v[0-9.]+"' | head -1 | cut -d'"' -f4)
-    [[ ! $caddy_ver ]] && caddy_ver="v2.8.4"
-    _wget -O /tmp/caddy.tar.gz "https://github.com/caddyserver/caddy/releases/download/$caddy_ver/caddy_${caddy_ver#v}_linux_${arch}.tar.gz"
-    tar zxf /tmp/caddy.tar.gz -C /tmp && mv /tmp/caddy $CADDY_BIN && rm -f /tmp/caddy.tar.gz
-    chmod +x $CADDY_BIN
-    
-    cat > $CADDYFILE << EOF
+    # Caddy 处理
+    if [[ "$caddy_mode" == "standalone" ]]; then
+        echo "下载 Caddy (独立模式)..."
+        mkdir -p $CADDY_DIR/sites $CADDY_CONF
+        caddy_ver=$(_wget -qO- "https://api.github.com/repos/caddyserver/caddy/releases/latest" 2>/dev/null | grep -oE '"tag_name": "v[0-9.]+"' | head -1 | cut -d'"' -f4)
+        [[ ! $caddy_ver ]] && caddy_ver="v2.8.4"
+        _wget -O /tmp/caddy.tar.gz "https://github.com/caddyserver/caddy/releases/download/$caddy_ver/caddy_${caddy_ver#v}_linux_${arch}.tar.gz"
+        tar zxf /tmp/caddy.tar.gz -C /tmp && mv /tmp/caddy $CADDY_BIN && rm -f /tmp/caddy.tar.gz
+        chmod +x $CADDY_BIN
+        
+        cat > $CADDYFILE << EOF
 {
   admin off
   http_port 80
@@ -115,6 +136,7 @@ do_install() {
 }
 import $CADDY_CONF/*.conf
 EOF
+    fi
 
     # 服务配置
     if [[ $use_systemd -eq 1 ]]; then
@@ -128,7 +150,8 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-        cat > /lib/systemd/system/caddy.service << EOF
+        if [[ "$caddy_mode" == "standalone" ]]; then
+            cat > /lib/systemd/system/caddy.service << EOF
 [Unit]
 Description=Caddy
 After=network.target
@@ -138,26 +161,10 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload && systemctl enable $CORE caddy 2>/dev/null || true
-    else
-        # OpenRC
-        cat > /etc/init.d/$CORE << EOF
-#!/sbin/openrc-run
-command="$CORE_BIN"
-command_args="run -c $CONFIG_JSON -C $CONF_DIR"
-command_background="yes"
-pidfile="/run/${CORE}.pid"
-EOF
-        cat > /etc/init.d/caddy << EOF
-#!/sbin/openrc-run
-command="$CADDY_BIN"
-command_args="run --config $CADDYFILE --adapter caddyfile"
-command_background="yes"
-pidfile="/run/caddy.pid"
-EOF
-        chmod +x /etc/init.d/$CORE /etc/init.d/caddy
-        rc-update add $CORE default 2>/dev/null || true
-        rc-update add caddy default 2>/dev/null || true
+        fi
+        systemctl daemon-reload
+        systemctl enable $CORE 2>/dev/null || true
+        [[ "$caddy_mode" == "standalone" ]] && systemctl enable caddy 2>/dev/null || true
     fi
     
     cat > $CONFIG_JSON << 'JSON'
@@ -190,15 +197,27 @@ JSON
 }
 CFG
     
-    # 写入 Caddy 配置 (默认 443)
-    cat > $CADDY_CONF/$host.conf << CADDY
+    # 写入 Caddy 反代配置
+    if [[ "$caddy_mode" == "existing" && -d $CADDY_CONF_D ]]; then
+        # 共存模式：写入 conf.d 目录
+        cat > $CADDY_CONF_D/${host}.caddy << CADDY
 ${host}:443 {
     reverse_proxy ${path} 127.0.0.1:${port}
 }
 CADDY
+        _green "Caddy 配置已写入: $CADDY_CONF_D/${host}.caddy"
+    else
+        # 独立模式：写入 sing-box 专用配置目录
+        mkdir -p $CADDY_CONF
+        cat > $CADDY_CONF/$host.conf << CADDY
+${host}:443 {
+    reverse_proxy ${path} 127.0.0.1:${port}
+}
+CADDY
+    fi
     
     cp -f "$0" $BIN && chmod +x $BIN
-    _svc_start
+    _svc_restart
     sleep 2
     
     _green "\n========== 安装完成 =========="
@@ -241,8 +260,7 @@ do_info() {
     echo "  对外端口: $ext_port"
     echo "  路径:    $path"
     echo "  UUID:    $uuid"
-    echo "  传输:    ws"
-    echo "  加密:    tls"
+    echo "  传输:    ws (TLS)"
     echo -e "${blue}---------------------------${none}"
 }
 
@@ -286,12 +304,15 @@ do_port() {
     [[ ! $new_port ]] && new_port=443
     [[ ! $new_port =~ ^[0-9]+$ || $new_port -lt 1 || $new_port -gt 65535 ]] && _err "端口范围错误"
     
-    # 仅修改 Caddy 配置
-    cat > $CADDY_CONF/$host.conf << CADDY
-${host}:${new_port} {
-    reverse_proxy ${path} 127.0.0.1:${local_port}
-}
-CADDY
+    # 定位并修改 Caddy 配置
+    if [[ -f $CADDY_CONF_D/${host}.caddy ]]; then
+        sed -i "s/${host}:[0-9]*/${host}:${new_port}/g" $CADDY_CONF_D/${host}.caddy
+    elif [[ -f $CADDY_CONF/$host.conf ]]; then
+        sed -i "s/${host}:[0-9]*/${host}:${new_port}/g" $CADDY_CONF/$host.conf
+    else
+        _err "找不到该域名的 Caddy 配置文件"
+    fi
+
     _svc_restart
     _green "对外端口已更新为: $new_port"
     do_url "$cfg"
@@ -313,8 +334,13 @@ do_uninstall() {
     read -p "确定卸载 sing-box? [y/N]: " confirm
     [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
     _svc_stop
-    [[ $use_systemd -eq 1 ]] && { systemctl disable $CORE caddy 2>/dev/null; rm -f /lib/systemd/system/$CORE.service /lib/systemd/system/caddy.service; } || { rc-update del $CORE 2>/dev/null; rc-update del caddy 2>/dev/null; rm -f /etc/init.d/$CORE /etc/init.d/caddy; }
-    rm -rf $CORE_DIR $LOG_DIR $BIN $CADDY_DIR $CADDY_BIN
+    [[ $use_systemd -eq 1 ]] && { systemctl disable $CORE 2>/dev/null; rm -f /lib/systemd/system/$CORE.service; }
+    # 如果是脚本安装的 Caddy 则清理，否则保留
+    if [[ -f $CADDY_BIN ]]; then
+         [[ $use_systemd -eq 1 ]] && { systemctl disable caddy 2>/dev/null; rm -f /lib/systemd/system/caddy.service; }
+         rm -rf $CADDY_DIR $CADDY_BIN
+    fi
+    rm -rf $CORE_DIR $LOG_DIR $BIN
     _green "卸载完成"
 }
 
