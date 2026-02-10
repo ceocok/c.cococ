@@ -27,7 +27,7 @@ declare -A script_names=(
   ["20"]="Caddy管理"
   ["21"]="系统换源"
   ["22"]="哪吒换源"
-  
+  ["23"]="Singbox" 
   ["0"]="退出"
 )
 
@@ -54,6 +54,7 @@ declare -A scripts=(
   ["20"]="caddyman.sh"
   ["21"]="yuan.sh"
   ["22"]="editnz.sh"
+  ["23"]="singbox.sh"  
 )
 
 # 显示菜单
