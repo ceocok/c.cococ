@@ -3,6 +3,9 @@
 # 使用cf代理
 BASE_URL="https://feria.eu.org/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
+# 定义通用的浏览器 User-Agent
+UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 # 显示菜单中文名称
 declare -A script_names=(
   ["1"]="安装 Snell"
@@ -60,29 +63,33 @@ declare -A scripts=(
 # 显示菜单
 show_menu() {
   echo "========== 🧰 工具合集 =========="
-  for key in "${!script_names[@]}"; do
-    echo "$key. ${script_names[$key]}"
-  done | sort -n
+  # 使用 sort -V 处理数字排序，比 -n 更稳定
+  for key in $(echo "${!script_names[@]}" | tr ' ' '\n' | sort -n); do
+    printf "%-3s. %s\n" "$key" "${script_names[$key]}"
+  done
   echo "=================================="
 }
 
-# 下载并执行脚本，支持 curl 或 wget
+# 下载并执行脚本
 run_script() {
   local script_name="$1"
   local url="$BASE_URL/$script_name"
   echo "📥 正在下载并执行 $script_name ..."
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o /tmp/$script_name
+    # 添加 -A (User-Agent) 和 -e (Referer)
+    curl -fsSL -A "$UA" -e "https://github.com/" "$url" -o /tmp/$script_name
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO /tmp/$script_name "$url"
+    # 添加 --user-agent 和 --referer
+    wget -q --user-agent="$UA" --referer="https://github.com/" -O /tmp/$script_name "$url"
   else
-    echo "❌ 未找到 curl 或 wget，无法下载脚本。请先安装其中一个工具。"
+    echo "❌ 未找到 curl 或 wget，无法下载。"
     return 1
   fi
 
   if [ $? -ne 0 ]; then
-    echo "❌ 下载失败，请检查网络或脚本路径：$url"
+    echo "❌ 下载失败 (HTTP 403 或网络问题)。"
+    echo "尝试访问的路径：$url"
     return 1
   fi
 
@@ -90,17 +97,16 @@ run_script() {
   bash /tmp/$script_name
 }
 
-
 # 设置 box 快捷命令
 setup_shortcut() {
-  if [ ! -f "/usr/local/bin/box" ]; then
-    cp "$(realpath "$0")" /usr/local/bin/box
-    chmod +x /usr/local/bin/box
-    echo "✅ 已创建快捷命令：输入 box 可随时启动工具箱。"
+  if [[ "$0" != "/usr/local/bin/box" ]]; then
+    cp "$0" /usr/local/bin/box 2>/dev/null
+    chmod +x /usr/local/bin/box 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "✅ 已创建快捷命令：输入 box 可随时启动工具箱。"
+    fi
   fi
 }
-
-
 
 # 自我更新
 update_self() {
@@ -108,16 +114,16 @@ update_self() {
   echo "🔄 正在更新 box 工具箱脚本..."
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$update_url" -o "$0.tmp"
+    curl -fsSL -A "$UA" -e "https://github.com/" "$update_url" -o "$0.tmp"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$0.tmp" "$update_url"
+    wget -q --user-agent="$UA" --referer="https://github.com/" -O "$0.tmp" "$update_url"
   else
-    echo "❌ 未找到 curl 或 wget，无法更新脚本。"
+    echo "❌ 未找到 curl 或 wget。"
     return 1
   fi
 
   if [ $? -ne 0 ]; then
-    echo "❌ 更新失败，无法从：$update_url 下载"
+    echo "❌ 更新失败。"
     return 1
   fi
 
@@ -134,18 +140,16 @@ main() {
     show_menu
     read -p "请输入功能序号: " choice
     if [[ "$choice" == "0" ]]; then
-      echo "👋 再见，已退出工具箱！"
+      echo "👋 再见！"
       exit 0
     elif [[ "$choice" == "16" ]]; then
       update_self
     elif [[ -n "${scripts[$choice]}" ]]; then
-      # 所有脚本都通过这里执行，包括 vmess.sh
       run_script "${scripts[$choice]}"
     else
-      echo "⚠️ 无效输入，请重新选择。"
+      echo "⚠️ 无效输入。"
     fi
   done
 }
-
 
 main
