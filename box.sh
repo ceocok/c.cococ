@@ -2,8 +2,8 @@
 
 # ========= 可调配置 =========
 REPO_RAW_BASE="https://raw.githubusercontent.com/ceocok/c.cococ/main"
-CF_PROXY_BASE="https://feria.eu.org/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 GH_PROXY_BASE="https://ghproxy.com/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+CF_PROXY_BASE="https://feria.eu.org/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 REFERER="https://github.com/"
