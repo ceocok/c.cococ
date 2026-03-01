@@ -96,8 +96,8 @@ download_file() {
 
 looks_like_html_challenge() {
     local f="$1"
-    # 移除了单独的 "cloudflare" 关键字，防止误杀正常脚本
-    grep -qiE '<html|<!doctype html|attention required|just a moment|cf-browser-verification' "$f"
+    # 使用 [h]tml 这种正则技巧，防止脚本在扫描自身代码时匹配到自己
+    grep -qiE '<[h]tml|<!doctype [h]tml|attention required|just a moment|cf-browser-verification' "$f"
 }
 
 run_script() {
