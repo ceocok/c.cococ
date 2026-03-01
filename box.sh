@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 使用cf代理
-BASE_URL="https://feria.eu.org/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+BASE_URL="https://ghproxy.com/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 定义通用的浏览器 User-Agent
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
