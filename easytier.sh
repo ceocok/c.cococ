@@ -1,7 +1,12 @@
 #!/bin/bash
 
 # --- 脚本配置 ---
-GITHUB_PROXY="feria.eu.org"
+# 定义备用 Github 代理节点池
+GITHUB_PROXIES=(
+    "ghfast.top"
+    "ghproxy.net"
+    "github.moeyy.xyz"
+)
 
 # 颜色定义
 GREEN="\033[1;32m"
@@ -38,11 +43,22 @@ check_root() {
 check_dependencies() {
 	local missing_deps=()
 	for cmd in curl jq unzip; do
-		if ! command -v "$cmd" &> /dev/null; then missing_deps+=("$cmd"); fi
+		# 检查命令是否存在
+		if ! command -v "$cmd" &> /dev/null; then 
+			missing_deps+=("$cmd")
+		else
+			# 针对 Alpine: 检查是否为 BusyBox 提供的精简版命令
+			if [[ "$OS_TYPE" == "alpine" ]]; then
+				if "$cmd" --help 2>&1 | grep -qi "BusyBox"; then
+					missing_deps+=("$cmd")
+				fi
+			fi
+		fi
 	done
+
 	if [ ${#missing_deps[@]} -gt 0 ]; then
-		echo -e "${YELLOW}检测到缺失的依赖: ${missing_deps[*]}${NC}"
-		if [[ "$OS_TYPE" == "linux" || "$OS_TYPE" == "alpine"  ]]; then
+		echo -e "${YELLOW}检测到缺失或需要替换完整版的依赖: ${missing_deps[*]}${NC}"
+		if [[ "$OS_TYPE" == "linux" || "$OS_TYPE" == "alpine" ]]; then
 			read -p "是否尝试自动安装? (y/n): " choice
 			if [[ "$choice" != "y" && "$choice" != "Y" ]]; then echo -e "${RED}操作中止。${NC}"; exit 1; fi
 			if [[ "$OS_TYPE" == "linux" ]]; then
@@ -50,10 +66,14 @@ check_dependencies() {
 				elif command -v yum &>/dev/null; then yum install -y "${missing_deps[@]}";
 				elif command -v dnf &>/dev/null; then dnf install -y "${missing_deps[@]}";
 				else echo -e "${RED}无法确定包管理器。请手动安装。${NC}"; exit 1; fi
-			elif [[ "$OS_TYPE" == "alpine" ]]; then apk add --no-cache "${missing_deps[@]}"; fi
+			elif [[ "$OS_TYPE" == "alpine" ]]; then 
+				apk update && apk add --no-cache "${missing_deps[@]}"
+			fi
 		elif [[ "$OS_TYPE" == "macos" ]]; then
 			echo -e "${YELLOW}请使用 Homebrew 手动安装: brew install ${missing_deps[*]}${NC}"; exit 1
 		fi
+		
+		# 再次校验是否安装成功
 		for cmd in "${missing_deps[@]}"; do
 			 if ! command -v "$cmd" &> /dev/null; then
 				echo -e "${RED}依赖 '$cmd' 安装失败。请手动安装后重试。${NC}"; exit 1
@@ -76,10 +96,8 @@ check_installed() {
 }
 
 set_toml_value() {
-	# This sed command works on both Linux and macOS
 	sed -i.bak "s|^#* *${1} *=.*|${1} = ${2}|" "$3" && rm "${3}.bak"
 }
-
 
 # --- 平台相关的服务管理功能 ---
 
@@ -100,7 +118,6 @@ After=network.target
 Type=simple
 User=root
 ExecStart=${INSTALL_DIR}/${CORE_BINARY_NAME} -c ${CONFIG_FILE}
-# 使用 "always" 策略确保进程无论如何退出都会被重启，提供最强的守护
 Restart=always
 RestartSec=5s
 
@@ -108,7 +125,6 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOL
     elif [[ "$OS_TYPE" == "alpine" ]]; then
-        # 使用 OpenRC 的 supervise-daemon 实现真正的进程守护
         cat > "${SERVICE_FILE}" << EOL
 #!/sbin/openrc-run
 description="EasyTier Service with Supervisor"
@@ -185,21 +201,59 @@ install_easytier() {
 	echo "1. 获取最新版本信息..."
 	local latest_info; latest_info=$(curl -sL "$GITHUB_API_URL")
 	if [ -z "$latest_info" ] || ! echo "$latest_info" | jq . >/dev/null 2>&1; then echo -e "${RED}错误: 无法从 GitHub API 获取版本信息。${NC}"; return 1; fi
+	
 	local search_prefix="easytier-${os_identifier}-${arch}"
 	local asset_json; asset_json=$(echo "$latest_info" | jq ".assets[] | select(.name | startswith(\"${search_prefix}\") and endswith(\".zip\"))")
 	if [ -z "$asset_json" ]; then echo -e "${RED}错误: 未能找到适用于 ${OS_TYPE}(${arch}) 的包。${NC}"; return 1; fi
+	
 	local download_url; download_url=$(echo "$asset_json" | jq -r '.browser_download_url')
 	local actual_filename; actual_filename=$(echo "$asset_json" | jq -r '.name')
 	local version; version=$(echo "$latest_info" | jq -r ".tag_name")
+	
 	echo "检测到版本: ${version}, 架构: ${arch}, 文件: ${actual_filename}"
-	if [ -n "$GITHUB_PROXY" ]; then download_url="https://$GITHUB_PROXY/$download_url"; echo -e "${YELLOW}2. 使用代理下载: ${download_url}${NC}"; else echo "2. 直接下载: ${download_url}"; fi
+	
+	local download_success=false
 	local temp_file; temp_file=$(mktemp)
-	curl -L --progress-bar -o "$temp_file" "$download_url" || { echo -e "${RED}下载失败!${NC}"; rm -f "$temp_file"; return 1; }
+	
+	# 尝试直接下载
+	echo "2. 尝试直接下载: ${download_url}"
+	if curl -L --progress-bar -o "$temp_file" "$download_url" && unzip -t "$temp_file" &> /dev/null; then
+		download_success=true
+		echo -e "${GREEN}直连下载成功！${NC}"
+	else
+		echo -e "${YELLOW}直连下载失败或文件损坏，开始尝试代理节点...${NC}"
+		# 遍历代理池尝试下载
+		for proxy in "${GITHUB_PROXIES[@]}"; do
+			local proxy_url="https://${proxy}/${download_url}"
+			echo "-> 尝试代理: ${proxy_url}"
+			if curl -L --progress-bar -o "$temp_file" "$proxy_url" && unzip -t "$temp_file" &> /dev/null; then
+				download_success=true
+				echo -e "${GREEN}代理节点 ($proxy) 下载成功！${NC}"
+				break
+			else
+				echo -e "${YELLOW}节点 $proxy 失败或文件无效，切换下一个...${NC}"
+			fi
+		done
+	fi
+
+	if [ "$download_success" = false ]; then
+		echo -e "${RED}错误: 所有下载尝试(直连+代理)均失败，请检查网络连接。${NC}"
+		rm -f "$temp_file"
+		return 1
+	fi
+
 	echo "3. 解压并安装..."
 	local unzip_dir_name="easytier-${os_identifier}-${arch}"
 	unzip -o "$temp_file" -d /tmp/ > /dev/null || { echo -e "${RED}解压失败!${NC}"; rm -f "$temp_file"; return 1; }
-	local extracted_core="/tmp/${unzip_dir_name}/${CORE_BINARY_NAME}"; local extracted_cli="/tmp/${unzip_dir_name}/${CLI_BINARY_NAME}"
-	if [ ! -f "$extracted_core" ] || [ ! -f "$extracted_cli" ]; then echo -e "${RED}错误: 在解压目录中未找到核心文件。${NC}"; rm -f "$temp_file"; rm -rf "/tmp/${unzip_dir_name}"; return 1; fi
+	
+	local extracted_core="/tmp/${unzip_dir_name}/${CORE_BINARY_NAME}"
+	local extracted_cli="/tmp/${unzip_dir_name}/${CLI_BINARY_NAME}"
+	
+	if [ ! -f "$extracted_core" ] || [ ! -f "$extracted_cli" ]; then 
+		echo -e "${RED}错误: 在解压目录中未找到核心文件。${NC}"
+		rm -f "$temp_file"; rm -rf "/tmp/${unzip_dir_name}"; return 1
+	fi
+	
 	mkdir -p "$INSTALL_DIR"
 	mv -f "$extracted_core" "${INSTALL_DIR}/${CORE_BINARY_NAME}"; mv -f "$extracted_cli" "${INSTALL_DIR}/${CLI_BINARY_NAME}"
 	chmod +x "${INSTALL_DIR}/${CORE_BINARY_NAME}" "${INSTALL_DIR}/${CLI_BINARY_NAME}"
@@ -264,7 +318,6 @@ deploy_new_network() {
 	create_service_file
 	reload_service_daemon
 	
-	# [MODIFIED] 自动启用并重启服务
 	echo -e "${YELLOW}正在设置开机自启并启动服务...${NC}"
 	enable_service
 	restart_service
@@ -303,7 +356,6 @@ join_existing_network() {
 	create_service_file
 	reload_service_daemon
 
-	# [MODIFIED] 自动启用并重启服务
 	echo -e "${YELLOW}正在设置开机自启并启动服务...${NC}"
 	enable_service
 	restart_service
@@ -311,7 +363,6 @@ join_existing_network() {
 
 	sleep 2; status_service
 }
-
 
 manage_service() { check_installed || return 1; PS3="请选择操作: "; options=("启动" "停止" "重启" "状态" "设为开机自启" "取消开机自启" "查看日志" "返回"); select opt in "${options[@]}"; do case $opt in "启动") start_service && echo -e "${GREEN}服务已启动。${NC}"; break ;; "停止") stop_service && echo -e "${GREEN}服务已停止。${NC}"; break ;; "重启") restart_service && echo -e "${GREEN}服务已重启。${NC}"; break ;; "状态") status_service; break ;; "设为开机自启") enable_service; break ;; "取消开机自启") disable_service; break ;; "查看日志") log_service; break ;; "返回") break ;; esac; done; }
 
@@ -367,4 +418,3 @@ main() {
 
 # 将 set_toml_value 函数定义移到 main 函数内部，以覆盖全局定义
 main "$@"
-
