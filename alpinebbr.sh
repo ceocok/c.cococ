@@ -1,13 +1,12 @@
 #!/bin/sh
 
 echo "=============================="
-echo " Alpine Linux BBR 启用脚本"
+echo " Alpine Linux BBR 自动开启脚本"
 echo "=============================="
 
 # 1. 检查内核版本
 KERNEL=$(uname -r)
 echo "当前内核版本: $KERNEL"
-
 MAJOR=$(echo $KERNEL | cut -d. -f1)
 MINOR=$(echo $KERNEL | cut -d. -f2)
 
@@ -16,50 +15,44 @@ if [ "$MAJOR" -lt 4 ] || { [ "$MAJOR" -eq 4 ] && [ "$MINOR" -lt 9 ]; }; then
     exit 1
 fi
 
-# 2. 检查是否为容器
+# 2. 检查容器环境
 if grep -qa container=lxc /proc/1/environ 2>/dev/null; then
-    echo "检测到 LXC/OpenVZ 容器环境，可能无法开启 BBR"
+    echo "⚠️ 检测到 LXC/OpenVZ 容器环境，可能无法开启 BBR"
 fi
 
-# 3. 检查是否已有 bbr
-AVAILABLE=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null)
+# 3. 尝试加载 tcp_bbr 模块
+echo "尝试加载 tcp_bbr 模块..."
+modprobe tcp_bbr 2>/dev/null
 
+# 4. 检查可用拥塞算法
+AVAILABLE=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null)
 echo "当前可用拥塞算法: $AVAILABLE"
 
 echo "$AVAILABLE" | grep -q bbr
-
 if [ $? -ne 0 ]; then
-    echo "当前内核未包含 BBR 模块"
-    echo "尝试安装 linux-lts 内核..."
-
-    apk update
-    apk add linux-lts
-
-    echo "已安装 linux-lts，请重启后重新运行此脚本"
-    exit 0
+    echo "⚠️ 内核尚未包含 BBR 模块或未加载成功"
+    echo "请确保你使用的内核是 Alpine LTS 或支持 BBR 的内核"
 fi
 
-# 4. 写入 sysctl
+# 5. 写入 sysctl 配置
 echo "写入 sysctl 配置..."
+grep -q "net.core.default_qdisc" /etc/sysctl.conf || echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf || echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
 
-if ! grep -q "net.core.default_qdisc" /etc/sysctl.conf; then
-    echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-fi
-
-if ! grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf; then
-    echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-fi
-
-# 5. 应用配置
+# 6. 应用配置
 sysctl -p
 
-# 6. 验证
-echo "当前拥塞控制算法:"
-sysctl net.ipv4.tcp_congestion_control
+# 7. 验证结果
+CURRENT=$(sysctl -n net.ipv4.tcp_congestion_control)
+echo "当前拥塞控制算法: $CURRENT"
 
 echo "BBR 状态:"
 lsmod | grep bbr
 
-echo "=============================="
-echo "如果显示 bbr，说明开启成功"
+if [ "$CURRENT" = "bbr" ]; then
+    echo "✅ BBR 已成功开启"
+else
+    echo "❌ BBR 未开启，可能内核不支持"
+fi
+
 echo "=============================="
