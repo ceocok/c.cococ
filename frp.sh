@@ -143,7 +143,7 @@ download_frp_package() {
     local pkg="frp_${FRP_VERSION}_linux_amd64.tar.gz"
 
     download_file "$out" \
-        "https://feria.eu.org/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${pkg}" \
+        "https://gh-proxy.org/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${pkg}" \
         "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${pkg}" \
         "https://ghproxy.com/https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${pkg}" || return 1
 
