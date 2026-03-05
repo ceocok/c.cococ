@@ -350,7 +350,7 @@ install_frps() {
     # 优化：兼容所有 Shell 版本的判断方式，避免报错
     if [[ "$use_auth" == "y" || "$use_auth" == "Y" ]]; then
         download_file "$FRP_DIR/fp-multiuser" \
-            "https://feria.eu.org/https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64" \
+            "https://gh-proxy.org/https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64" \
             "https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64" \
             "https://ghproxy.com/https://github.com/gofrp/fp-multiuser/releases/download/v${PLUGIN_VERSION}/fp-multiuser-linux-amd64" || {
             echo -e "${Red}fp-multiuser 下载失败${Font}"
