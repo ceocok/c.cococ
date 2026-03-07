@@ -215,7 +215,22 @@ restart_openclaw(){
   sleep 1
  done
 
- nohup "$openclaw_bin" gateway run > "$LOG_FILE" 2>&1 &
+ if quiet_run openclaw gateway start; then
+  for i in {1..10}; do
+   if gateway_is_listening; then
+    return 0
+   fi
+   sleep 1
+  done
+ fi
+
+ if need_cmd setsid; then
+  setsid "$openclaw_bin" gateway run </dev/null >> "$LOG_FILE" 2>&1 &
+ else
+  nohup "$openclaw_bin" gateway run </dev/null >> "$LOG_FILE" 2>&1 &
+ fi
+
+ disown >/dev/null 2>&1 || true
 
  for i in {1..15}; do
   if gateway_is_listening; then
