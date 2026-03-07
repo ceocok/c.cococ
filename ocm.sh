@@ -58,6 +58,24 @@ ensure_dirs(){
  mkdir -p "$OPENCLAW_DIR" "$BACKUP_DIR"
 }
 
+install_ocm_command(){
+ local target script_path
+ script_path="/root/ocm.sh"
+ target="/usr/local/bin/ocm"
+
+ if [ ! -f "$script_path" ]; then
+  echo "⚠️ 未找到 $script_path，跳过 ocm 命令安装。"
+  return 1
+ fi
+
+ cat > "$target" <<EOF
+#!/usr/bin/env bash
+exec bash "$script_path" "\$@"
+EOF
+ chmod +x "$target"
+ return 0
+}
+
 backup_config(){
  if [[ -f "$CONFIG" ]]; then
   local ts
@@ -445,7 +463,9 @@ install_openclaw() {
   need_cmd openclaw || { echo "❌ OpenClaw 安装后仍不可用，请检查 npm 全局 PATH。"; pause; return 1; }
  fi
 
+ install_ocm_command || true
  restart_openclaw || { pause; return 1; }
+ echo "✅ Gateway 已启动，监听端口: $(jq -r '.gateway.port // 52525' "$CONFIG")，以后可直接输入 ocm 启动本脚本"
  echo "✅ 安装完成。"
  post_install_setup
 }
