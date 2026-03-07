@@ -161,7 +161,8 @@ restart_openclaw(){
   return 1
  fi
 
- local i
+ local i openclaw_bin
+ openclaw_bin=$(command -v openclaw)
  stop_openclaw
 
  for i in {1..10}; do
@@ -171,7 +172,7 @@ restart_openclaw(){
   sleep 1
  done
 
- nohup openclaw gateway run > "$LOG_FILE" 2>&1 &
+ nohup "$openclaw_bin" gateway run > "$LOG_FILE" 2>&1 &
 
  for i in {1..15}; do
   if gateway_is_listening; then
@@ -434,16 +435,17 @@ install_openclaw() {
   echo "✅ 检测到已有配置。"
  fi
 
- if ! need_cmd openclaw; then
+ if need_cmd openclaw; then
+  echo "✅ 检测到 OpenClaw 已安装。"
+ else
   prepare_node_env || return 1
   echo "⚙️ 正在安装 OpenClaw..."
   npm install -g openclaw@latest >/dev/null || sudo npm install -g openclaw@latest >/dev/null || { echo "❌ 安装失败"; pause; return 1; }
   hash -r
- else
-  echo "✅ 检测到 OpenClaw 已安装。"
+  need_cmd openclaw || { echo "❌ OpenClaw 安装后仍不可用，请检查 npm 全局 PATH。"; pause; return 1; }
  fi
 
- restart_openclaw
+ restart_openclaw || { pause; return 1; }
  echo "✅ 安装完成。"
  post_install_setup
 }
