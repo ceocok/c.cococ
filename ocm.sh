@@ -187,12 +187,20 @@ gateway_is_listening(){
  local gw_port
  gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
 
+ if need_cmd lsof; then
+  lsof -nP -iTCP:"$gw_port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+ fi
+
  if need_cmd ss; then
-  ss -ltn 2>/dev/null | grep -q ":$gw_port "
-  return $?
- elif need_cmd netstat; then
-  netstat -ltn 2>/dev/null | grep -q ":$gw_port "
-  return $?
+  ss -ltn 2>/dev/null | grep -q ":$gw_port " && return 0
+ fi
+
+ if need_cmd netstat; then
+  netstat -an 2>/dev/null | grep -E "[\.:]$gw_port[[:space:]].*LISTEN|LISTEN[[:space:]].*[\.:]$gw_port" >/dev/null 2>&1 && return 0
+ fi
+
+ if need_cmd curl; then
+  curl -s -o /dev/null --connect-timeout 2 "http://127.0.0.1:$gw_port/" >/dev/null 2>&1 && return 0
  fi
 
  return 1
