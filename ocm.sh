@@ -8,6 +8,8 @@ BACKUP_DIR="$OPENCLAW_DIR/backups"
 
 pause(){ read -r -p "回车继续..." ; }
 need_cmd(){ command -v "$1" >/dev/null 2>&1; }
+cmd_path(){ command -v "$1" 2>/dev/null || true; }
+cmd_exists(){ local p; p=$(cmd_path "$1"); [[ -n "$p" && -x "$p" ]]; }
 quiet_run(){ "$@" >/dev/null 2>&1; }
 
 safe_pkill_gateway(){
@@ -58,9 +60,27 @@ ensure_dirs(){
  mkdir -p "$OPENCLAW_DIR" "$BACKUP_DIR"
 }
 
+resolve_script_path(){
+ local src
+ src="${BASH_SOURCE[0]:-$0}"
+
+ if need_cmd readlink; then
+  readlink -f "$src" 2>/dev/null && return 0
+ fi
+
+ if need_cmd realpath; then
+  realpath "$src" 2>/dev/null && return 0
+ fi
+
+ case "$src" in
+  /*) echo "$src" ;;
+  *) echo "$(pwd)/$src" ;;
+ esac
+}
+
 install_ocm_command(){
  local target script_path
- script_path="/root/ocm.sh"
+ script_path=$(resolve_script_path)
  target="/usr/local/bin/ocm"
 
  if [ ! -f "$script_path" ]; then
@@ -174,13 +194,13 @@ gateway_is_listening(){
 }
 
 restart_openclaw(){
- if ! need_cmd openclaw; then
+ if ! cmd_exists openclaw; then
   echo "❌ 未检测到 openclaw 命令，无法重启 Gateway"
   return 1
  fi
 
  local i openclaw_bin
- openclaw_bin=$(command -v openclaw)
+ openclaw_bin=$(cmd_path openclaw)
  stop_openclaw
 
  for i in {1..10}; do
@@ -205,7 +225,7 @@ restart_openclaw(){
 }
 
 stop_openclaw(){
- if need_cmd openclaw; then
+ if cmd_exists openclaw; then
   quiet_run openclaw gateway stop || true
  fi
  safe_pkill_gateway
@@ -285,8 +305,14 @@ generate_token(){
 }
 
 get_openclaw_version(){
- local v
- v=$(openclaw --version 2>/dev/null | head -n1 | tr -d '[:space:]' || true)
+ local openclaw_bin v
+ openclaw_bin=$(cmd_path openclaw)
+ if [[ -z "$openclaw_bin" || ! -x "$openclaw_bin" ]]; then
+  echo "unknown"
+  return 0
+ fi
+
+ v=$("$openclaw_bin" --version 2>/dev/null | head -n1 | tr -d '[:space:]' || true)
  if [[ -n "$v" ]]; then
   echo "$v"
  else
@@ -453,14 +479,14 @@ install_openclaw() {
   echo "✅ 检测到已有配置。"
  fi
 
- if need_cmd openclaw; then
+ if cmd_exists openclaw; then
   echo "✅ 检测到 OpenClaw 已安装。"
  else
   prepare_node_env || return 1
   echo "⚙️ 正在安装 OpenClaw..."
   npm install -g openclaw@latest >/dev/null || sudo npm install -g openclaw@latest >/dev/null || { echo "❌ 安装失败"; pause; return 1; }
   hash -r
-  need_cmd openclaw || { echo "❌ OpenClaw 安装后仍不可用，请检查 npm 全局 PATH。"; pause; return 1; }
+  cmd_exists openclaw || { echo "❌ OpenClaw 安装后仍不可用，请检查 npm 全局 PATH。"; pause; return 1; }
  fi
 
  install_ocm_command || true
@@ -474,10 +500,11 @@ validate_api_connectivity() {
  local provider=$1
  echo -e "\n🔍 开始测试 API 可用性: $provider ..."
 
- local port token p_mid target_model is_enabled local_url gw_resp gw_body gw_code err_msg curl_exit
+ local port token p_mid target_model p_api is_enabled local_url payload gw_resp gw_body gw_code err_msg curl_exit
  port=$(jq -r '.gateway.port' "$CONFIG")
  token=$(jq -r '.gateway.auth.token // ""' "$CONFIG")
  p_mid=$(jq -r --arg p "$provider" '.models.providers[$p].models[0].id' "$CONFIG")
+ p_api=$(jq -r --arg p "$provider" '.models.providers[$p].api // "openai-completions"' "$CONFIG")
  target_model="$provider/$p_mid"
 
  is_enabled=$(jq -r '.gateway.http.endpoints.chatCompletions.enabled' "$CONFIG")
@@ -493,14 +520,27 @@ validate_api_connectivity() {
   }
  fi
 
- local_url="http://127.0.0.1:$port/v1/chat/completions"
+ case "$p_api" in
+  openai-responses)
+   local_url="http://127.0.0.1:$port/v1/responses"
+   payload=$(jq -nc --arg model "$target_model" '{model:$model,input:"hi",max_output_tokens:16}')
+   ;;
+  anthropic-messages)
+   local_url="http://127.0.0.1:$port/v1/messages"
+   payload=$(jq -nc --arg model "$target_model" '{model:$model,max_tokens:16,messages:[{role:"user",content:"hi"}]}')
+   ;;
+  *)
+   local_url="http://127.0.0.1:$port/v1/chat/completions"
+   payload=$(jq -nc --arg model "$target_model" '{model:$model,messages:[{role:"user",content:"hi"}],max_tokens:16}')
+   ;;
+ esac
 
  set +e
  gw_resp=$(curl -s -w "\n%{http_code}" -X POST "$local_url" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $token" \
   --connect-timeout 15 \
-  -d "{ \"model\": \"$target_model\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"max_tokens\": 16 }")
+  -d "$payload")
  curl_exit=$?
  set -e
 
@@ -1116,7 +1156,7 @@ manage_installation(){
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
     echo "卸载中..."
 
-    if need_cmd openclaw; then
+    if cmd_exists openclaw; then
      quiet_run openclaw gateway stop || true
     fi
     safe_pkill_gateway
@@ -1128,6 +1168,7 @@ manage_installation(){
     if need_cmd npm; then
      npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
     fi
+    hash -r
 
     echo "✅ OpenClaw 程序已卸载，数据已保留。"
    else
@@ -1140,7 +1181,7 @@ manage_installation(){
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
     echo "卸载中..."
 
-    if need_cmd openclaw; then
+    if cmd_exists openclaw; then
      quiet_run openclaw gateway stop || true
     fi
     safe_pkill_gateway
@@ -1152,7 +1193,9 @@ manage_installation(){
     if need_cmd npm; then
      npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
     fi
+    hash -r
     rm -rf "$OPENCLAW_DIR"
+    rm -f /usr/local/bin/ocm
 
     echo "✅ OpenClaw 已彻底卸载完成。"
    else
