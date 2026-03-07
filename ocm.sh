@@ -441,7 +441,7 @@ validate_api_connectivity() {
  local provider=$1
  echo -e "\n🔍 开始测试 API 可用性: $provider ..."
 
- local port token p_mid target_model is_enabled local_url gw_resp gw_body gw_code err_msg
+ local port token p_mid target_model is_enabled local_url gw_resp gw_body gw_code err_msg curl_exit
  port=$(jq -r '.gateway.port' "$CONFIG")
  token=$(jq -r '.gateway.auth.token // ""' "$CONFIG")
  p_mid=$(jq -r --arg p "$provider" '.models.providers[$p].models[0].id' "$CONFIG")
@@ -455,21 +455,28 @@ validate_api_connectivity() {
 
  local_url="http://127.0.0.1:$port/v1/chat/completions"
 
+ set +e
  gw_resp=$(curl -s -w "\n%{http_code}" -X POST "$local_url" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $token" \
   --connect-timeout 15 \
   -d "{ \"model\": \"$target_model\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"max_tokens\": 16 }")
+ curl_exit=$?
+ set -e
 
  gw_body=$(echo "$gw_resp" | sed '$d')
  gw_code=$(echo "$gw_resp" | tail -n1)
  echo ""
 
+ if [ "$curl_exit" -ne 0 ] && [ -z "$gw_code" ]; then
+  gw_code="000"
+ fi
+
  if [ "$gw_code" = "200" ]; then
   echo "✅ 测试通过。"
   return 0
- elif [ "$gw_code" = "000" ]; then
-  echo "❌ 无法连接到本地 Gateway。"
+ elif [ "$gw_code" = "000" ] || [ "$curl_exit" -ne 0 ]; then
+  echo "❌ 无法连接到本地 Gateway 或请求发送失败。"
   tail -n 8 "$LOG_FILE" 2>/dev/null | sed 's/^/ /'
   return 1
  else
@@ -505,8 +512,16 @@ save_model_logic() {
   new_json=$(echo "$new_json" | jq --arg m "$full_model" '.agents.defaults.model.primary=$m | .agents.defaults.model.fallbacks=[$m]')
  fi
 
- save_config "$new_json" && restart_openclaw && validate_api_connectivity "$p_name"
- echo "👉 大模型配置完毕。"
+ if save_config "$new_json" && restart_openclaw; then
+  if validate_api_connectivity "$p_name"; then
+   echo "👉 大模型配置完毕。"
+  else
+   echo "⚠️ 大模型已保存，但测试未通过，请检查上游接口或协议类型。"
+  fi
+ else
+  echo "❌ 大模型保存或 Gateway 重启失败。"
+  return 1
+ fi
 }
 
 add_preset_model() {
