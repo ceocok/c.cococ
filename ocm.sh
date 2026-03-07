@@ -41,6 +41,12 @@ check_dep(){
   elif need_cmd yum; then
    need_cmd jq || sudo yum install -y epel-release jq >/dev/null
    need_cmd curl || sudo yum install -y curl >/dev/null
+  elif need_cmd pacman; then
+   sudo pacman -Sy --noconfirm jq curl >/dev/null
+  elif need_cmd apk; then
+   sudo apk add --no-cache jq curl >/dev/null
+  elif need_cmd zypper; then
+   sudo zypper --non-interactive install jq curl >/dev/null
   else
    echo "❌ 无法自动安装依赖，请手动安装 jq 和 curl！"
    exit 1
@@ -84,6 +90,15 @@ prepare_node_env() {
   curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - >/dev/null 2>&1
   sudo yum install -y nodejs >/dev/null
   return 0
+ elif need_cmd pacman; then
+  sudo pacman -Sy --noconfirm nodejs npm >/dev/null
+  return 0
+ elif need_cmd apk; then
+  sudo apk add --no-cache nodejs npm >/dev/null
+  return 0
+ elif need_cmd zypper; then
+  sudo zypper --non-interactive install nodejs22 npm22 || sudo zypper --non-interactive install nodejs npm >/dev/null
+  return 0
  fi
 
  echo "❌ Node.js 环境准备失败，请手动安装 Node v22+！"
@@ -112,14 +127,37 @@ save_config() {
 }
 
 restart_openclaw(){
- if need_cmd openclaw; then
-  if quiet_run openclaw gateway restart; then
-   sleep 2
-   return 0
-  fi
+ if ! need_cmd openclaw; then
+  echo "❌ 未检测到 openclaw 命令，无法重启 Gateway"
+  return 1
  fi
 
+ local gw_port i
+ gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
+
+ quiet_run openclaw gateway stop || true
  safe_pkill_gateway
+
+ for i in {1..10}; do
+  if need_cmd ss; then
+   if ! ss -ltn 2>/dev/null | grep -q ":$gw_port "; then
+    break
+   fi
+  elif need_cmd netstat; then
+   if ! netstat -ltn 2>/dev/null | grep -q ":$gw_port "; then
+    break
+   fi
+  else
+   break
+  fi
+  sleep 1
+ done
+
+ if quiet_run openclaw gateway start; then
+  sleep 3
+  return 0
+ fi
+
  nohup openclaw gateway > "$LOG_FILE" 2>&1 &
  sleep 3
 }
@@ -341,41 +379,10 @@ add_cors_origin(){
 }
 
 post_install_setup(){
- local next_choice
-
- while true; do
-  echo -e "\n--- 安装后引导 ---"
-  echo "1) 立即配置大模型"
-  echo "2) 立即配置 channel"
-  echo "3) 两个都配"
-  echo "0) 稍后再说，返回主菜单"
-  echo "------------------------------------------------"
-  read -r -p "请选择操作: " next_choice
-
-  case "$next_choice" in
-   1)
-    add_preset_model
-    pause
-    return
-    ;;
-   2)
-    manage_channels
-    return
-    ;;
-   3)
-    add_preset_model
-    pause
-    manage_channels
-    return
-    ;;
-   0|"")
-    return
-    ;;
-   *)
-    echo "❌ 无效选择，请重新输入。"
-    ;;
-  esac
- done
+ echo -e "\n🚀 安装完成，接下来配置大模型..."
+ add_preset_model
+ echo -e "\n📱 接下来配置 channel..."
+ manage_channels
 }
 
 install_openclaw() {
@@ -1003,9 +1010,7 @@ manage_installation(){
   4)
    read -r -p "确认直接卸载 OpenClaw？(y/N): " confirm
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-    local before_count after_count
-    before_count=$(count_openclaw_processes)
-    echo "当前发现 openclaw 相关进程: $before_count"
+    echo "卸载中..."
 
     if need_cmd openclaw; then
      quiet_run openclaw gateway stop || true
@@ -1021,13 +1026,7 @@ manage_installation(){
     fi
     rm -rf "$OPENCLAW_DIR"
 
-    after_count=$(count_openclaw_processes)
-    echo "卸载后剩余 openclaw 相关进程: $after_count"
-    if [[ "$after_count" = "0" ]]; then
-     echo "✅ 已卸载完成。"
-    else
-     echo "⚠️ 已执行卸载，但仍检测到残留进程，请手动复查。"
-    fi
+    echo "✅ 卸载完成。"
    else
     echo "已取消。"
    fi
