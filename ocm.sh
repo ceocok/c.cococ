@@ -340,6 +340,44 @@ add_cors_origin(){
  echo "✅ 已添加域名: $origin"
 }
 
+post_install_setup(){
+ local next_choice
+
+ while true; do
+  echo -e "\n--- 安装后引导 ---"
+  echo "1) 立即配置大模型"
+  echo "2) 立即配置 channel"
+  echo "3) 两个都配"
+  echo "0) 稍后再说，返回主菜单"
+  echo "------------------------------------------------"
+  read -r -p "请选择操作: " next_choice
+
+  case "$next_choice" in
+   1)
+    add_preset_model
+    pause
+    return
+    ;;
+   2)
+    manage_channels
+    return
+    ;;
+   3)
+    add_preset_model
+    pause
+    manage_channels
+    return
+    ;;
+   0|"")
+    return
+    ;;
+   *)
+    echo "❌ 无效选择，请重新输入。"
+    ;;
+  esac
+ done
+}
+
 install_openclaw() {
  echo -e "\n🚀 开始安装 OpenClaw..."
  check_dep
@@ -364,6 +402,7 @@ install_openclaw() {
 
  restart_openclaw
  echo "✅ 安装完成。"
+ post_install_setup
 }
 
 validate_api_connectivity() {
