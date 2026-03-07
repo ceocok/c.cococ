@@ -140,47 +140,58 @@ save_config() {
  return 0
 }
 
+gateway_is_listening(){
+ local gw_port
+ gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
+
+ if need_cmd ss; then
+  ss -ltn 2>/dev/null | grep -q ":$gw_port "
+  return $?
+ elif need_cmd netstat; then
+  netstat -ltn 2>/dev/null | grep -q ":$gw_port "
+  return $?
+ fi
+
+ return 1
+}
+
 restart_openclaw(){
  if ! need_cmd openclaw; then
   echo "❌ 未检测到 openclaw 命令，无法重启 Gateway"
   return 1
  fi
 
- local gw_port i
- gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
-
- quiet_run openclaw gateway stop || true
- safe_pkill_gateway
+ local i
+ stop_openclaw
 
  for i in {1..10}; do
-  if need_cmd ss; then
-   if ! ss -ltn 2>/dev/null | grep -q ":$gw_port "; then
-    break
-   fi
-  elif need_cmd netstat; then
-   if ! netstat -ltn 2>/dev/null | grep -q ":$gw_port "; then
-    break
-   fi
-  else
+  if ! gateway_is_listening; then
    break
   fi
   sleep 1
  done
 
- if quiet_run openclaw gateway start; then
-  sleep 3
-  return 0
- fi
+ nohup openclaw gateway run > "$LOG_FILE" 2>&1 &
 
- nohup openclaw gateway > "$LOG_FILE" 2>&1 &
- sleep 3
+ for i in {1..15}; do
+  if gateway_is_listening; then
+   return 0
+  fi
+  sleep 1
+ done
+
+ echo "❌ Gateway 启动失败，请检查日志: $LOG_FILE"
+ tail -n 12 "$LOG_FILE" 2>/dev/null || true
+ return 1
 }
 
 stop_openclaw(){
  if need_cmd openclaw; then
-  quiet_run openclaw gateway stop && return 0 || true
+  quiet_run openclaw gateway stop || true
  fi
  safe_pkill_gateway
+ pkill -f 'openclaw-gateway' 2>/dev/null || true
+ pkill -f '/openclaw gateway run' 2>/dev/null || true
 }
 
 gateway_json_check(){
@@ -450,7 +461,14 @@ validate_api_connectivity() {
  is_enabled=$(jq -r '.gateway.http.endpoints.chatCompletions.enabled' "$CONFIG")
  if [ "$is_enabled" != "true" ]; then
   save_config "$(jq '.gateway.http.endpoints.chatCompletions.enabled = true' "$CONFIG")"
-  restart_openclaw
+ fi
+
+ if ! gateway_is_listening; then
+  echo "⚙️ 检测到 Gateway 未运行，正在后台启动..."
+  restart_openclaw || {
+   echo "❌ Gateway 启动失败，无法执行 API 测试。"
+   return 1
+  }
  fi
 
  local_url="http://127.0.0.1:$port/v1/chat/completions"
@@ -986,7 +1004,17 @@ show_gateway_token(){
 }
 
 gateway_manage(){
+ local gw_port gw_status
+ gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
+
+ if gateway_is_listening; then
+  gw_status="运行中"
+ else
+  gw_status="未运行"
+ fi
+
  echo -e "\n--- Gateway 管理 ---"
+ echo "当前状态: $gw_status (端口: $gw_port)"
  echo "1) 重启 Gateway"
  echo "2) 停止 Gateway"
  echo "0) 返回"
