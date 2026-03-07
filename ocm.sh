@@ -506,23 +506,37 @@ validate_api_connectivity() {
  echo -e "\n🔍 开始测试 API 连通性: $provider ..."
 
  local port token p_mid p_api target_model is_enabled local_url payload gw_resp gw_body gw_code err_msg curl_exit
+ local original_primary original_fallbacks switched_for_test=false
  port=$(jq -r '.gateway.port' "$CONFIG")
  token=$(jq -r '.gateway.auth.token // ""' "$CONFIG")
  p_mid=$(jq -r --arg p "$provider" '.models.providers[$p].models[0].id' "$CONFIG")
  p_api=$(jq -r --arg p "$provider" '.models.providers[$p].api // "openai-completions"' "$CONFIG")
  target_model="$provider/$p_mid"
 
+ original_primary=$(jq -r '.agents.defaults.model.primary // ""' "$CONFIG")
+ original_fallbacks=$(jq -c '.agents.defaults.model.fallbacks // []' "$CONFIG")
+
  is_enabled=$(jq -r '.gateway.http.endpoints.chatCompletions.enabled' "$CONFIG")
  if [ "$is_enabled" != "true" ]; then
   save_config "$(jq '.gateway.http.endpoints.chatCompletions.enabled = true' "$CONFIG")"
  fi
 
+ if [[ "$original_primary" != "$target_model" ]]; then
+  save_config "$(jq --arg m "$target_model" '.agents.defaults.model.primary=$m | .agents.defaults.model.fallbacks=[$m]' "$CONFIG")"
+  switched_for_test=true
+ fi
+
  if ! gateway_is_listening; then
   echo "⚙️ 检测到 Gateway 未运行，正在后台启动..."
   restart_openclaw || {
+   if [ "$switched_for_test" = true ]; then
+    save_config "$(jq --arg p "$original_primary" --argjson f "$original_fallbacks" '.agents.defaults.model.primary=$p | .agents.defaults.model.fallbacks=$f' "$CONFIG")" || true
+   fi
    echo "❌ Gateway 启动失败，无法执行 API 测试。"
    return 1
   }
+ elif [ "$switched_for_test" = true ]; then
+  restart_openclaw || true
  fi
 
  local_url="http://127.0.0.1:$port/v1/chat/completions"
@@ -536,6 +550,11 @@ validate_api_connectivity() {
   -d "$payload")
  curl_exit=$?
  set -e
+
+ if [ "$switched_for_test" = true ]; then
+  save_config "$(jq --arg p "$original_primary" --argjson f "$original_fallbacks" '.agents.defaults.model.primary=$p | .agents.defaults.model.fallbacks=$f' "$CONFIG")" || true
+  restart_openclaw || true
+ fi
 
  gw_body=$(echo "$gw_resp" | sed '$d')
  gw_code=$(echo "$gw_resp" | tail -n1)
@@ -1210,18 +1229,18 @@ menu(){
  clear
  echo "🍀 OpenClaw 全能管理助手 stable"
  echo "------------------------------------------------"
- printf "%-4s %s\n" "1."  "🚀 安装 OpenClaw"
- printf "%-4s %s\n" "2."  "📂 快捷添加大模型"
- printf "%-4s %s\n" "3."  "⚙️ 管理大模型配置"
- printf "%-4s %s\n" "4."  "🤖 切换默认主模型"
- printf "%-4s %s\n" "5."  "📱 管理设置 channel"
- printf "%-4s %s\n" "6."  "🛠️ 测试 API 可用性"
- printf "%-4s %s\n" "7."  "🔌 修改端口/添加域名"
- printf "%-4s %s\n" "8."  "🔑 一键批准终端设备"
- printf "%-4s %s\n" "9."  "🔄 Gateway 管理"
- printf "%-4s %s\n" "10." "🔎 查询 Gateway Token"
- printf "%-4s %s\n" "11." "⚠️ 升级/重置/卸载管理"
- printf "%-4s %s\n" "0."  "退出"
+ printf "%-3s %s\n" "1."  "🚀 安装 OpenClaw"
+ printf "%-3s %s\n" "2."  "📂 快捷添加大模型"
+ printf "%-3s %s\n" "3."  "⚙️ 管理大模型配置"
+ printf "%-3s %s\n" "4."  "🤖 切换默认主模型"
+ printf "%-3s %s\n" "5."  "📱 管理设置 channel"
+ printf "%-3s %s\n" "6."  "🛠️ 测试 API 可用性"
+ printf "%-3s %s\n" "7."  "🔌 修改端口/添加域名"
+ printf "%-3s %s\n" "8."  "🔑 一键批准终端设备"
+ printf "%-3s %s\n" "9."  "🔄 Gateway 管理"
+ printf "%-3s %s\n" "10." "🔎 查询 Gateway Token"
+ printf "%-3s %s\n" "11." "⚠️ 升级/重置/卸载管理"
+ printf "%-3s %s\n" "0."  "退出"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " choice
 
