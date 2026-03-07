@@ -503,9 +503,9 @@ install_openclaw() {
 
 validate_api_connectivity() {
  local provider=$1
- echo -e "\n🔍 开始测试 API 可用性: $provider ..."
+ echo -e "\n🔍 开始测试 API 连通性: $provider ..."
 
- local port token p_mid target_model p_api is_enabled local_url payload gw_resp gw_body gw_code err_msg curl_exit
+ local port token p_mid p_api target_model is_enabled local_url payload gw_resp gw_body gw_code err_msg curl_exit
  port=$(jq -r '.gateway.port' "$CONFIG")
  token=$(jq -r '.gateway.auth.token // ""' "$CONFIG")
  p_mid=$(jq -r --arg p "$provider" '.models.providers[$p].models[0].id' "$CONFIG")
@@ -525,20 +525,8 @@ validate_api_connectivity() {
   }
  fi
 
- case "$p_api" in
-  openai-responses)
-   local_url="http://127.0.0.1:$port/v1/responses"
-   payload=$(jq -nc --arg model "$target_model" '{model:$model,input:"hi",max_output_tokens:16}')
-   ;;
-  anthropic-messages)
-   local_url="http://127.0.0.1:$port/v1/messages"
-   payload=$(jq -nc --arg model "$target_model" '{model:$model,max_tokens:16,messages:[{role:"user",content:"hi"}]}')
-   ;;
-  *)
-   local_url="http://127.0.0.1:$port/v1/chat/completions"
-   payload=$(jq -nc --arg model "$target_model" '{model:$model,messages:[{role:"user",content:"hi"}],max_tokens:16}')
-   ;;
- esac
+ local_url="http://127.0.0.1:$port/v1/chat/completions"
+ payload=$(jq -nc --arg model "$target_model" '{model:$model,messages:[{role:"user",content:"hi"}],max_tokens:16}')
 
  set +e
  gw_resp=$(curl -s -w "\n%{http_code}" -X POST "$local_url" \
@@ -558,7 +546,10 @@ validate_api_connectivity() {
  fi
 
  if [ "$gw_code" = "200" ]; then
-  echo "✅ 测试通过。"
+  echo "✅ 连通性测试通过。"
+  if [ "$p_api" != "openai-completions" ]; then
+   echo "ℹ️ 当前协议为 $p_api，本次为通过 Gateway chat/completions 做的兼容性连通测试。"
+  fi
   return 0
  elif [ "$gw_code" = "000" ] || [ "$curl_exit" -ne 0 ]; then
   echo "❌ 无法连接到本地 Gateway 或请求发送失败。"
