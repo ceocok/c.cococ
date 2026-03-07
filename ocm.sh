@@ -66,42 +66,56 @@ backup_config(){
  fi
 }
 
+node_major_version(){
+ if ! need_cmd node; then
+  echo 0
+  return 0
+ fi
+
+ local node_ver
+ node_ver=$(node -v 2>/dev/null | sed 's/v//' | cut -d'.' -f1)
+ if [[ "$node_ver" =~ ^[0-9]+$ ]]; then
+  echo "$node_ver"
+ else
+  echo 0
+ fi
+}
+
 prepare_node_env() {
- if need_cmd npm && need_cmd node; then
-  local node_ver
-  node_ver=$(node -v | sed 's/v//' | cut -d'.' -f1)
-  if [[ "$node_ver" =~ ^[0-9]+$ ]] && [ "$node_ver" -ge 22 ]; then
-   return 0
-  fi
+ local node_ver
+ node_ver=$(node_major_version)
+ if need_cmd npm && [ "$node_ver" -ge 22 ]; then
+  return 0
  fi
 
  echo "⚙️ 正在准备 Node.js 22+ ..."
  if [[ "${OSTYPE:-}" == darwin* ]]; then
-  need_cmd brew && { brew install node@22 >/dev/null; brew link --overwrite --force node@22 >/dev/null 2>&1 || true; return 0; }
+  need_cmd brew && { brew install node@22 >/dev/null; brew link --overwrite --force node@22 >/dev/null 2>&1 || true; }
  elif need_cmd apt-get; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1
   sudo apt-get install -y nodejs >/dev/null
-  return 0
  elif need_cmd dnf; then
   curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - >/dev/null 2>&1
   sudo dnf install -y nodejs >/dev/null
-  return 0
  elif need_cmd yum; then
   curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - >/dev/null 2>&1
   sudo yum install -y nodejs >/dev/null
-  return 0
  elif need_cmd pacman; then
-  sudo pacman -Sy --noconfirm nodejs npm >/dev/null
-  return 0
+  sudo pacman -S --noconfirm --needed nodejs npm >/dev/null
  elif need_cmd apk; then
   sudo apk add --no-cache nodejs npm >/dev/null
-  return 0
  elif need_cmd zypper; then
-  sudo zypper --non-interactive install nodejs22 npm22 || sudo zypper --non-interactive install nodejs npm >/dev/null
+  sudo zypper --non-interactive install nodejs22 npm22 >/dev/null 2>&1 || \
+  sudo zypper --non-interactive install nodejs npm >/dev/null 2>&1 || true
+ fi
+
+ hash -r
+ node_ver=$(node_major_version)
+ if need_cmd npm && [ "$node_ver" -ge 22 ]; then
   return 0
  fi
 
- echo "❌ Node.js 环境准备失败，请手动安装 Node v22+！"
+ echo "❌ Node.js 环境准备失败，当前 Node 版本不足 22，请手动安装 Node v22+！"
  return 1
 }
 
@@ -240,19 +254,30 @@ generate_token(){
  fi
 }
 
+get_openclaw_version(){
+ local v
+ v=$(openclaw --version 2>/dev/null | head -n1 | tr -d '[:space:]' || true)
+ if [[ -n "$v" ]]; then
+  echo "$v"
+ else
+  echo "unknown"
+ fi
+}
+
 write_default_config(){
- local gen_token curr_date
+ local gen_token curr_date current_version
  gen_token=$(generate_token)
  curr_date=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+ current_version=$(get_openclaw_version)
  cat <<EOF
 {
  "meta": {
-  "lastTouchedVersion": "2026.3.2",
+  "lastTouchedVersion": "$current_version",
   "lastTouchedAt": "$curr_date"
  },
  "wizard": {
   "lastRunAt": "$curr_date",
-  "lastRunVersion": "2026.3.2",
+  "lastRunVersion": "$current_version",
   "lastRunCommand": "onboard",
   "lastRunMode": "local"
  },
@@ -887,7 +912,20 @@ set_port(){
 
  if [[ -n "$np" ]]; then
   [[ "$np" =~ ^[0-9]+$ ]] || { echo "❌ 端口必须是数字"; pause; return; }
-  new_json=$(jq --argjson p "$np" '.gateway.port=$p' "$CONFIG")
+  new_json=$(jq --argjson oldp "$old_p" --argjson newp "$np" '
+   .gateway.port=$newp |
+   .gateway.controlUi = (.gateway.controlUi // {}) |
+   .gateway.controlUi.allowedOrigins = ((.gateway.controlUi.allowedOrigins // [
+    ("http://127.0.0.1:" + ($oldp|tostring)),
+    ("http://localhost:" + ($oldp|tostring))
+   ])
+   | map(
+      if . == ("http://127.0.0.1:" + ($oldp|tostring)) then ("http://127.0.0.1:" + ($newp|tostring))
+      elif . == ("http://localhost:" + ($oldp|tostring)) then ("http://localhost:" + ($newp|tostring))
+      else . end
+     )
+   | unique)
+  ' "$CONFIG")
   save_config "$new_json"
  fi
 
@@ -966,7 +1004,8 @@ manage_installation(){
  echo "1) 备份后重建默认配置"
  echo "2) 升级 OpenClaw 到最新版本"
  echo "3) 直接重置 OpenClaw"
- echo "4) 直接卸载 OpenClaw"
+ echo "4) 仅卸载 OpenClaw 程序（保留 ~/.openclaw 数据）"
+ echo "5) 彻底卸载 OpenClaw（删除 ~/.openclaw 全部数据）"
  echo "0) 取消并返回主菜单"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " mi_choice
@@ -1008,7 +1047,31 @@ manage_installation(){
    pause
    ;;
   4)
-   read -r -p "确认直接卸载 OpenClaw？(y/N): " confirm
+   read -r -p "确认仅卸载 OpenClaw 程序，并保留 ~/.openclaw 数据？(y/N): " confirm
+   if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    echo "卸载中..."
+
+    if need_cmd openclaw; then
+     quiet_run openclaw gateway stop || true
+    fi
+    safe_pkill_gateway
+    pkill -f 'openclaw-gateway' 2>/dev/null || true
+    pkill -f '/openclaw ' 2>/dev/null || true
+    if need_cmd pnpm; then
+     pnpm remove -g openclaw >/dev/null 2>&1 || true
+    fi
+    if need_cmd npm; then
+     npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
+    fi
+
+    echo "✅ OpenClaw 程序已卸载，数据已保留。"
+   else
+    echo "已取消。"
+   fi
+   pause
+   ;;
+  5)
+   read -r -p "确认彻底卸载 OpenClaw 并删除 ~/.openclaw 全部数据？(y/N): " confirm
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
     echo "卸载中..."
 
@@ -1026,7 +1089,7 @@ manage_installation(){
     fi
     rm -rf "$OPENCLAW_DIR"
 
-    echo "✅ 卸载完成。"
+    echo "✅ OpenClaw 已彻底卸载完成。"
    else
     echo "已取消。"
    fi
