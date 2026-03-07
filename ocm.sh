@@ -6,6 +6,11 @@ OPENCLAW_DIR="$HOME/.openclaw"
 LOG_FILE="$OPENCLAW_DIR/gateway.log"
 BACKUP_DIR="$OPENCLAW_DIR/backups"
 
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+RESET='\033[0m'
+
 pause(){ read -r -p "回车继续..." ; }
 need_cmd(){ command -v "$1" >/dev/null 2>&1; }
 cmd_path(){ command -v "$1" 2>/dev/null || true; }
@@ -491,8 +496,8 @@ install_openclaw() {
 
  install_ocm_command || true
  restart_openclaw || { pause; return 1; }
- echo "✅ Gateway 已启动，监听端口: $(jq -r '.gateway.port // 52525' "$CONFIG")，以后可直接输入 ocm 启动本脚本"
- echo "✅ 安装完成。"
+ echo -e "${GREEN}✅ Gateway 已启动，监听端口: $(jq -r '.gateway.port // 52525' "$CONFIG")，以后可直接输入 ${YELLOW}ocm${GREEN} 启动本脚本${RESET}"
+ echo -e "${CYAN}🎉 安装完成。${RESET}"
  post_install_setup
 }
 
@@ -970,7 +975,7 @@ manage_channels(){
  echo "1) 添加 channel"
  echo "2) 编辑 channel"
  echo "3) 删除 channel"
- echo "0) 返回"
+ echo "回车) 返回主菜单"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " sub_choice
 
@@ -978,6 +983,7 @@ manage_channels(){
   1) add_channel; pause ;;
   2) edit_channel ;;
   3) delete_channel ;;
+  ""|0) return ;;
   *) return ;;
  esac
 }
