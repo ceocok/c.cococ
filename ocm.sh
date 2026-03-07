@@ -65,6 +65,24 @@ ensure_dirs(){
  mkdir -p "$OPENCLAW_DIR" "$BACKUP_DIR"
 }
 
+resolve_ocm_target(){
+ if [[ "${OSTYPE:-}" == darwin* ]]; then
+  if need_cmd brew; then
+   local brew_prefix
+   brew_prefix=$(brew --prefix 2>/dev/null || true)
+   if [[ -n "$brew_prefix" && -d "$brew_prefix/bin" ]]; then
+    echo "$brew_prefix/bin/ocm"
+    return 0
+   fi
+  fi
+  if [[ -d "/opt/homebrew/bin" ]]; then
+   echo "/opt/homebrew/bin/ocm"
+   return 0
+  fi
+ fi
+ echo "/usr/local/bin/ocm"
+}
+
 resolve_script_path(){
  local src
  src="${BASH_SOURCE[0]:-$0}"
@@ -86,7 +104,7 @@ resolve_script_path(){
 install_ocm_command(){
  local target script_path
  script_path=$(resolve_script_path)
- target="/usr/local/bin/ocm"
+ target="$(resolve_ocm_target)"
 
  if [ ! -f "$script_path" ]; then
   echo "⚠️ 未找到 $script_path，跳过 ocm 命令安装。"
@@ -1234,7 +1252,7 @@ manage_installation(){
     fi
     hash -r
     rm -rf "$OPENCLAW_DIR"
-    rm -f /usr/local/bin/ocm
+    rm -f "$(resolve_ocm_target)" /usr/local/bin/ocm /opt/homebrew/bin/ocm
 
     echo "✅ OpenClaw 已彻底卸载完成。"
    else
