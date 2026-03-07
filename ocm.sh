@@ -1255,5 +1255,6 @@ menu(){
  esac
 }
 
+install_ocm_command >/dev/null 2>&1 || true
 check_dep
 while true; do menu; done
