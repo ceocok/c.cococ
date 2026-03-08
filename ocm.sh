@@ -126,6 +126,7 @@ backup_config(){
   local ts
   ts=$(date +%Y%m%d-%H%M%S)
   cp "$CONFIG" "$BACKUP_DIR/openclaw.json.$ts.bak"
+  ls -t "$BACKUP_DIR"/openclaw.json.*.bak 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
  fi
 }
 
@@ -153,7 +154,15 @@ prepare_node_env() {
 
  echo "⚙️ 正在准备 Node.js 22+ ..."
  if [[ "${OSTYPE:-}" == darwin* ]]; then
-  need_cmd brew && { brew install node@22 >/dev/null; brew link --overwrite --force node@22 >/dev/null 2>&1 || true; }
+  need_cmd brew && {
+   brew install node@22 >/dev/null
+   brew link --overwrite --force node@22 >/dev/null 2>&1 || true
+   if [[ -d "/opt/homebrew/opt/node@22/bin" ]]; then
+    export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+   elif [[ -d "/usr/local/opt/node@22/bin" ]]; then
+    export PATH="/usr/local/opt/node@22/bin:$PATH"
+   fi
+  }
  elif need_cmd apt-get; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1
   sudo apt-get install -y nodejs >/dev/null
@@ -1463,3 +1472,4 @@ menu(){
 install_ocm_command >/dev/null 2>&1 || true
 check_dep
 while true; do menu; done
+
