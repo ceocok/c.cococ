@@ -943,10 +943,18 @@ add_channel() {
     return
    fi
 
-   if ! openclaw doctor >/dev/null 2>&1; then
-    cp "$pre_backup" "$CONFIG" 2>/dev/null || true
-    echo "❌ Telegram 配置校验失败，已回滚"
-    return
+   if need_cmd timeout; then
+    if ! timeout 20s openclaw config validate >/dev/null 2>&1; then
+     cp "$pre_backup" "$CONFIG" 2>/dev/null || true
+     echo "❌ Telegram 配置校验失败（或超时），已回滚"
+     return
+    fi
+   else
+    if ! openclaw config validate >/dev/null 2>&1; then
+     cp "$pre_backup" "$CONFIG" 2>/dev/null || true
+     echo "❌ Telegram 配置校验失败，已回滚"
+     return
+    fi
    fi
 
    if restart_openclaw; then
