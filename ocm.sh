@@ -235,18 +235,54 @@ gateway_is_listening(){
  return 1
 }
 
+mac_gateway_label(){
+ echo "ai.openclaw.gateway"
+}
+
+mac_gateway_plist(){
+ echo "$HOME/Library/LaunchAgents/$(mac_gateway_label).plist"
+}
+
+mac_gateway_service_loaded(){
+ [[ "${OSTYPE:-}" == darwin* ]] || return 1
+ launchctl print "gui/$(id -u)/$(mac_gateway_label)" >/dev/null 2>&1
+}
+
+mac_gateway_service_fix(){
+ [[ "${OSTYPE:-}" == darwin* ]] || return 1
+
+ local uid label plist_path
+ uid=$(id -u)
+ label=$(mac_gateway_label)
+ plist_path=$(mac_gateway_plist)
+
+ [ -f "$plist_path" ] || return 1
+
+ launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
+ launchctl enable "gui/$uid/$label" >/dev/null 2>&1 || true
+ launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+
+ mac_gateway_service_loaded
+}
+
 start_openclaw(){
  if ! cmd_exists openclaw; then
   echo "❌ 未检测到 openclaw 命令，无法启动 Gateway"
   return 1
  fi
 
+ local i openclaw_bin
+ openclaw_bin=$(cmd_path openclaw)
+
+ if [[ "${OSTYPE:-}" == darwin* ]]; then
+  if ! mac_gateway_service_loaded; then
+   mac_gateway_service_fix || true
+  fi
+ fi
+
  if gateway_is_listening; then
   return 0
  fi
-
- local i openclaw_bin
- openclaw_bin=$(cmd_path openclaw)
 
  # 先尝试系统服务（macOS launchd / Linux systemd）
  if quiet_run openclaw gateway start; then
@@ -258,18 +294,10 @@ start_openclaw(){
   done
  fi
 
- # macOS: service 未加载则自动补 bootstrap + kickstart
+ # macOS: service 未加载则再次修复 launchd
  if [[ "${OSTYPE:-}" == darwin* ]]; then
-  local plist_path label uid
-  uid=$(id -u)
-  label="ai.openclaw.gateway"
-  plist_path="$HOME/Library/LaunchAgents/${label}.plist"
-
-  if [ -f "$plist_path" ]; then
-   launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
-   launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
-
-   for i in {1..8}; do
+  if mac_gateway_service_fix; then
+   for i in {1..10}; do
     if gateway_is_listening; then
      return 0
     fi
@@ -591,23 +619,10 @@ install_openclaw() {
 
   # macOS: 立即加载并启动，避免“安装了但未运行”
   if [[ "${OSTYPE:-}" == darwin* ]]; then
-   local plist_path label uid
-   uid=$(id -u)
-   label="ai.openclaw.gateway"
-   plist_path="$HOME/Library/LaunchAgents/${label}.plist"
-
-   if [[ -f "$plist_path" ]]; then
-    echo "⚙️ 正在加载并启动 launchd 服务..."
-    launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
-    launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
-
-    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
-     echo "✅ launchd 服务已加载并激活"
-    else
-     echo "⚠️ launchd 已写入但未激活，将回退后台托管模式"
-    fi
+   if mac_gateway_service_fix; then
+    echo "✅ launchd 服务已加载并激活"
    else
-    echo "⚠️ 未发现 launchd plist: $plist_path"
+    echo "⚠️ launchd 已写入但未激活，将回退后台托管模式"
    fi
   else
    echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
@@ -742,13 +757,14 @@ save_model_logic() {
 
 add_preset_model() {
  echo -e "\n--- 快捷添加大模型 ---"
- echo "1) OpenAI 2) Anthropic 3) Google 4) xAI"
- echo "5) Mistral 6) DeepSeek 7) SiliconFlow 8) Groq"
- echo "9) Cerebras 10) OpenRouter 11) Vercel Gateway 12) OpenAI Codex"
- echo "13) OpenCode 14) Ollama 15) Google Vertex 16) Gemini CLI"
- echo "17) GitHub Copilot 18) Z.AI 19) Aliyun/Qwen 20) ZhiPu"
- echo "21) Yi 22) Moonshot 23) MiniMax 24) Tencent"
- echo "25) Volcengine 26) Baichuan 0) 自定义中转"
+ printf "%-22s %-22s %-22s %-22s\n" " 1) OpenAI" " 2) Anthropic" " 3) Google" " 4) xAI"
+ printf "%-22s %-22s %-22s %-22s\n" " 5) Mistral" " 6) DeepSeek" " 7) SiliconFlow" " 8) Groq"
+ printf "%-22s %-22s %-22s %-22s\n" " 9) Cerebras" "10) OpenRouter" "11) Vercel Gateway" "12) OpenAI Codex"
+ printf "%-22s %-22s %-22s %-22s\n" "13) OpenCode" "14) Ollama" "15) Google Vertex" "16) Gemini CLI"
+ printf "%-22s %-22s %-22s %-22s\n" "17) GitHub Copilot" "18) Z.AI" "19) Aliyun/Qwen" "20) ZhiPu"
+ printf "%-22s %-22s %-22s %-22s\n" "21) Yi" "22) Moonshot" "23) MiniMax" "24) Tencent"
+ printf "%-22s %-22s\n" "25) Volcengine" "26) Baichuan"
+ echo " 0) 自定义中转"
  read -r -p "请选择编号 (回车跳过): " p_choice
 
  [[ -z "$p_choice" ]] && return
@@ -1304,10 +1320,22 @@ gateway_manage(){
  local gw_port gw_status
  gw_port=$(jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo "52525")
 
- if gateway_is_listening; then
-  gw_status="运行中"
+ if [[ "${OSTYPE:-}" == darwin* ]]; then
+  if mac_gateway_service_loaded && gateway_is_listening; then
+   gw_status="运行中（launchd 已加载）"
+  elif mac_gateway_service_loaded; then
+   gw_status="异常（launchd 已加载，但端口未监听）"
+  elif [ -f "$(mac_gateway_plist)" ]; then
+   gw_status="未运行（LaunchAgent 已安装但未加载）"
+  else
+   gw_status="未运行（LaunchAgent 未安装）"
+  fi
  else
-  gw_status="未运行"
+  if gateway_is_listening; then
+   gw_status="运行中"
+  else
+   gw_status="未运行"
+  fi
  fi
 
  echo -e "\n--- Gateway 管理 ---"
