@@ -610,7 +610,7 @@ install_openclaw() {
     echo "⚠️ 未发现 launchd plist: $plist_path"
    fi
   else
-   echo "✅ Gateway 系统服务已安装"
+   echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
   fi
  else
   echo "⚠️ Gateway 系统服务安装失败，将使用后台托管模式"
@@ -799,9 +799,9 @@ add_model_manual() {
  read -r -p "Provider 名称: " name
  read -r -p "API BaseURL: " url
  read -r -p "API Key: " key
- read -r -p "协议类型 (1: openai-responses, 2: openai-completions, 3: anthropic-messages): " t_idx
+ read -r -p "协议类型 (1: openai-responses, 2: openai-completions, 3: anthropic-messages) [默认2]: " t_idx
 
- case "$t_idx" in
+ case "${t_idx:-2}" in
   1) api="openai-responses" ;;
   3) api="anthropic-messages" ;;
   *) api="openai-completions" ;;
