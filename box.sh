@@ -28,6 +28,7 @@ declare -A script_names=(
   ["21"]="系统换源"
   ["22"]="哪吒换源"
   ["23"]="Singbox" 
+  ["24"]="OpenClaw" 
   ["0"]="退出"
 )
 
@@ -55,6 +56,7 @@ declare -A scripts=(
   ["21"]="yuan.sh"
   ["22"]="editnz.sh"
   ["23"]="singbox.sh"  
+  ["24"]="ocm.sh"
 )
 
 # 显示菜单
