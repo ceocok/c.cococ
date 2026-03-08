@@ -1009,8 +1009,12 @@ print_channels_with_index(){
  local i=1 c ctype
  while IFS= read -r c; do
   [[ -z "$c" ]] && continue
-  ctype=$(jq -r --arg n "$c" '.channels[$n].type // "unknown"' "$CONFIG")
-  echo "$i) $c [$ctype]"
+  ctype=$(jq -r --arg n "$c" '.channels[$n].type // ""' "$CONFIG")
+  if [[ -n "$ctype" ]]; then
+   echo "$i) $c [$ctype]"
+  else
+   echo "$i) $c"
+  fi
   i=$((i+1))
  done <<EOF
 $(list_channels)
