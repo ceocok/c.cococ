@@ -65,24 +65,6 @@ ensure_dirs(){
  mkdir -p "$OPENCLAW_DIR" "$BACKUP_DIR"
 }
 
-resolve_ocm_target(){
- if [[ "${OSTYPE:-}" == darwin* ]]; then
-  if need_cmd brew; then
-   local brew_prefix
-   brew_prefix=$(brew --prefix 2>/dev/null || true)
-   if [[ -n "$brew_prefix" && -d "$brew_prefix/bin" ]]; then
-    echo "$brew_prefix/bin/ocm"
-    return 0
-   fi
-  fi
-  if [[ -d "/opt/homebrew/bin" ]]; then
-   echo "/opt/homebrew/bin/ocm"
-   return 0
-  fi
- fi
- echo "/usr/local/bin/ocm"
-}
-
 resolve_script_path(){
  local src
  src="${BASH_SOURCE[0]:-$0}"
@@ -104,7 +86,7 @@ resolve_script_path(){
 install_ocm_command(){
  local target script_path
  script_path=$(resolve_script_path)
- target="$(resolve_ocm_target)"
+ target="/usr/local/bin/ocm"
 
  if [ ! -f "$script_path" ]; then
   echo "⚠️ 未找到 $script_path，跳过 ocm 命令安装。"
@@ -906,7 +888,7 @@ EOF
 }
 
 add_channel() {
- local c_type cn ct pid aid sec new_json
+ local c_type cn ct pid aid sec tg_uid new_json pre_backup
 
  echo -e "\n--- 添加 channel ---"
  echo "1) WhatsApp"
@@ -923,29 +905,81 @@ add_channel() {
    read -r -p "Access Token: " ct
    read -r -p "Phone Number ID: " pid
    new_json=$(jq --arg n "$cn" --arg t "$ct" --arg p "$pid" '.channels[$n]={type:"whatsapp", token:$t, phoneId:$p, enabled:true}' "$CONFIG")
+   save_config "$new_json" && restart_openclaw && echo "✅ channel 已保存！"
    ;;
   2)
-   read -r -p "channel 名称: " cn
-   read -r -p "Bot Token: " ct
-   new_json=$(jq --arg n "$cn" --arg t "$ct" '.channels[$n]={type:"telegram", token:$t, enabled:true}' "$CONFIG")
+   echo -e "\n--- 添加 Telegram Bot ---"
+   read -r -p "Telegram机器人Token: " ct
+   read -r -p "Telegram机器人用户ID: " tg_uid
+
+   [[ -z "${ct:-}" ]] && { echo "❌ Bot Token 不能为空"; return; }
+   [[ -z "${tg_uid:-}" ]] && { echo "❌ Telegram 用户ID不能为空"; return; }
+
+   if [[ ! "$ct" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
+    echo "❌ Bot Token 格式不正确，应类似 123456789:AA..."
+    return
+   fi
+
+   if [[ ! "$tg_uid" =~ ^[0-9]+$ ]]; then
+    echo "❌ Telegram 用户ID应为纯数字"
+    return
+   fi
+
+   pre_backup="$BACKUP_DIR/openclaw.json.pre-telegram.$(date +%Y%m%d-%H%M%S).bak"
+   cp "$CONFIG" "$pre_backup" 2>/dev/null || true
+
+   new_json=$(jq --arg t "$ct" --arg uid "$tg_uid" '
+    .channels = (.channels // {}) |
+    .channels.telegram = {
+      botToken: $t,
+      allowFrom: [$uid],
+      dmPolicy: "allowlist",
+      enabled: true
+    }
+   ' "$CONFIG")
+
+   if ! save_config "$new_json"; then
+    echo "❌ Telegram 配置保存失败"
+    return
+   fi
+
+   if ! openclaw doctor >/dev/null 2>&1; then
+    cp "$pre_backup" "$CONFIG" 2>/dev/null || true
+    echo "❌ Telegram 配置校验失败，已回滚"
+    return
+   fi
+
+   if restart_openclaw; then
+    echo "✅ Telegram Bot 已配置并重启成功"
+    if openclaw message send --channel telegram --target "$tg_uid" --message "测试消息：Telegram 已通过 ocm 脚本配置成功。" >/dev/null 2>&1; then
+     echo "✅ 已发送 Telegram 测试消息"
+    else
+     echo "⚠️ 配置成功，但测试消息发送失败（请检查机器人是否已先与用户发起对话）"
+    fi
+   else
+    cp "$pre_backup" "$CONFIG" 2>/dev/null || true
+    restart_openclaw >/dev/null 2>&1 || true
+    echo "❌ Gateway 重启失败，已回滚到修改前配置"
+    return
+   fi
    ;;
   3)
    read -r -p "channel 名称: " cn
    read -r -p "Bot Token: " ct
    new_json=$(jq --arg n "$cn" --arg t "$ct" '.channels[$n]={type:"discord", token:$t, enabled:true}' "$CONFIG")
+   save_config "$new_json" && restart_openclaw && echo "✅ channel 已保存！"
    ;;
   4)
    read -r -p "channel 名称: " cn
    read -r -p "AgentId: " aid
    read -r -p "Secret: " sec
    new_json=$(jq --arg n "$cn" --arg ai "$aid" --arg s "$sec" '.channels[$n]={type:"wecom", agentId:$ai, secret:$s, enabled:true}' "$CONFIG")
+   save_config "$new_json" && restart_openclaw && echo "✅ channel 已保存！"
    ;;
   *)
    return
    ;;
  esac
-
- save_config "$new_json" && restart_openclaw && echo "✅ channel 已保存！"
 }
 
 edit_channel(){
@@ -1252,7 +1286,7 @@ manage_installation(){
     fi
     hash -r
     rm -rf "$OPENCLAW_DIR"
-    rm -f "$(resolve_ocm_target)" /usr/local/bin/ocm /opt/homebrew/bin/ocm
+    rm -f /usr/local/bin/ocm
 
     echo "✅ OpenClaw 已彻底卸载完成。"
    else
