@@ -610,7 +610,7 @@ install_openclaw() {
     echo "⚠️ 未发现 launchd plist: $plist_path"
    fi
   else
-   echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
+   echo "✅ Gateway 系统服务已安装"
   fi
  else
   echo "⚠️ Gateway 系统服务安装失败，将使用后台托管模式"
