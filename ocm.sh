@@ -876,7 +876,8 @@ EOF
 }
 
 edit_model(){
- local target c_url c_key c_api c_mid n_url n_key n_t n_api n_mid num
+ local target c_url c_key c_api c_mid n_name n_url n_key n_t n_api n_mid num
+ local new_json current_primary fallback_models provider_exists final_target
  if [[ -z "$(list_providers)" ]]; then
   echo "📭 当前未添加任何大模型配置"
   pause
@@ -894,6 +895,37 @@ edit_model(){
  c_mid=$(jq -r --arg p "$target" '.models.providers[$p].models[0].id' "$CONFIG")
 
  echo -e "\n--- 修改 $target (回车保持原样) ---"
+ read -r -p "Provider 名称 [$target]: " n_name; n_name=${n_name:-$target}
+
+ if [[ "$n_name" != "$target" ]]; then
+  provider_exists=$(jq -r --arg p "$n_name" '.models.providers[$p] != null' "$CONFIG")
+  if [[ "$provider_exists" == "true" ]]; then
+   echo "❌ Provider 名称已存在：$n_name"
+   pause
+   return
+  fi
+
+  new_json=$(jq --arg old "$target" --arg new "$n_name" '
+   .models.providers[$new] = .models.providers[$old] |
+   del(.models.providers[$old])
+  ' "$CONFIG")
+
+  current_primary=$(echo "$new_json" | jq -r '.agents.defaults.model.primary // ""')
+  if [[ "$current_primary" == "$target/"* ]]; then
+   current_primary="$n_name/${current_primary#*/}"
+   new_json=$(echo "$new_json" | jq --arg m "$current_primary" '.agents.defaults.model.primary=$m')
+  fi
+
+  fallback_models=$(echo "$new_json" | jq -c --arg old "$target/" --arg new "$n_name/" '
+   (.agents.defaults.model.fallbacks // []) | map(if startswith($old) then ($new + (split("/")[1])) else . end)
+  ')
+  new_json=$(echo "$new_json" | jq --argjson f "$fallback_models" '.agents.defaults.model.fallbacks=$f')
+
+  save_config "$new_json" || { pause; return; }
+  target="$n_name"
+  echo "✅ Provider 名称已修改：$target"
+ fi
+
  read -r -p "BaseURL [$c_url]: " n_url; n_url=${n_url:-$c_url}
  read -r -p "API Key [已隐藏，回车保持]: " n_key; n_key=${n_key:-$c_key}
  read -r -p "协议 (1:openai-responses, 2:openai-completions, 3:anthropic-messages) [$c_api]: " n_t
@@ -1180,13 +1212,15 @@ manage_channels(){
 }
 
 switch_model(){
- local num selected new_json
+ local num selected new_json current_model
  if [[ -z "$(list_models)" ]]; then
   echo "📭 当前未添加任何大模型配置"
   pause
   return
  fi
 
+ current_model=$(jq -r '.agents.defaults.model.primary // "未设置"' "$CONFIG")
+ echo "当前使用的模型: $current_model"
  print_models_with_index
  read -r -p "选择新的默认主模型: " num
  selected=$(pick_model_by_index "$num" || true)
