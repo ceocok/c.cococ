@@ -1252,7 +1252,7 @@ switch_model(){
 }
 
 set_port(){
- local old_p np new_json
+ local old_p np new_json changed=0
  old_p=$(jq -r '.gateway.port' "$CONFIG")
  read -r -p "当前网关端口 $old_p, 输入新端口 (回车跳过): " np
 
@@ -1273,10 +1273,18 @@ set_port(){
    | unique)
   ' "$CONFIG")
   save_config "$new_json"
+  changed=1
  fi
 
- add_cors_origin
- restart_openclaw
+ if add_cors_origin; then
+  changed=1
+ fi
+
+ if [[ "$changed" -eq 1 ]]; then
+  restart_openclaw
+ else
+  echo "ℹ️ 未做任何修改，无需重启 Gateway"
+ fi
  pause
 }
 
@@ -1492,15 +1500,15 @@ menu(){
  echo "------------------------------------------------"
  printf "%-3s %s\n" "1."  "🚀 安装 OpenClaw"
  printf "%-3s %s\n" "2."  "📂 快捷添加大模型"
- printf "%-3s %s\n" "3."  "⚙️  管理大模型配置"
+ printf "%-3s %s\n" "3."  "⚙️ 管理大模型配置"
  printf "%-3s %s\n" "4."  "🤖 切换默认主模型"
  printf "%-3s %s\n" "5."  "📱 管理设置 channel"
- printf "%-3s %s\n" "6."  "🛠️  测试 API 可用性"
+ printf "%-3s %s\n" "6."  "🛠️ 测试 API 可用性"
  printf "%-3s %s\n" "7."  "🔌 修改端口/添加域名"
  printf "%-3s %s\n" "8."  "🔑 一键批准终端设备"
  printf "%-3s %s\n" "9."  "🔄 Gateway 管理"
  printf "%-3s %s\n" "10." "🔎 查询 Gateway Token"
- printf "%-3s %s\n" "11." "⚠️  升级/重置/卸载管理"
+ printf "%-3s %s\n" "11." "⚠️ 升级/重置/卸载管理"
  printf "%-3s %s\n" "0."  "退出"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " choice
