@@ -86,18 +86,38 @@ resolve_script_path(){
 install_ocm_command(){
  local target script_path
  script_path=$(resolve_script_path)
- target="/usr/local/bin/ocm"
 
- if [ ! -f "$script_path" ]; then
-  echo "⚠️ 未找到 $script_path，跳过 ocm 命令安装。"
-  return 1
+ # macOS 优先放到 Homebrew 前缀（Apple Silicon 常见）
+ if [[ "${OSTYPE:-}" == darwin* ]] && [ -d "/opt/homebrew/bin" ]; then
+  target="/opt/homebrew/bin/ocm"
+ else
+  target="/usr/local/bin/ocm"
  fi
 
- cat > "$target" <<EOF
+ if [ ! -f "$script_path" ]; then
+  return 0
+ fi
+
+ # 尝试直接写入
+ if cat > "$target" 2>/dev/null <<EOF
 #!/usr/bin/env bash
 exec bash "$script_path" "\$@"
 EOF
- chmod +x "$target"
+ then
+  chmod +x "$target" 2>/dev/null || true
+  return 0
+ fi
+
+ # 需要 sudo 权限
+ if need_cmd sudo; then
+  sudo mkdir -p "$(dirname "$target")" >/dev/null 2>&1 || true
+  sudo tee "$target" >/dev/null 2>&1 <<EOF
+#!/usr/bin/env bash
+exec bash "$script_path" "\$@"
+EOF
+  sudo chmod +x "$target" 2>/dev/null || true
+ fi
+
  return 0
 }
 
@@ -229,7 +249,27 @@ start_openclaw(){
   done
  fi
 
- # 服务不可用时，回退到前台命令的后台托管模式
+ # macOS: service 未加载则自动补 bootstrap + kickstart
+ if [[ "${OSTYPE:-}" == darwin* ]]; then
+  local plist_path label uid
+  uid=$(id -u)
+  label="ai.openclaw.gateway"
+  plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+
+  if [ -f "$plist_path" ]; then
+   launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
+   launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+
+   for i in {1..8}; do
+    if gateway_is_listening; then
+     return 0
+    fi
+    sleep 1
+   done
+  fi
+ fi
+
+ # 服务不可用时，回退到后台托管模式
  if need_cmd setsid; then
   setsid "$openclaw_bin" gateway run </dev/null >> "$LOG_FILE" 2>&1 &
  else
@@ -538,7 +578,31 @@ install_openclaw() {
  # 安装 Gateway 系统服务（macOS launchd / Linux systemd）
  echo "⚙️ 正在安装 Gateway 系统服务..."
  if openclaw gateway install >/dev/null 2>&1; then
-  echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
+  echo "✅ Gateway 系统服务已安装"
+
+  # macOS: 立即加载并启动，避免“安装了但未运行”
+  if [[ "${OSTYPE:-}" == darwin* ]]; then
+   local plist_path label uid
+   uid=$(id -u)
+   label="ai.openclaw.gateway"
+   plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+
+   if [[ -f "$plist_path" ]]; then
+    echo "⚙️ 正在加载并启动 launchd 服务..."
+    launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
+    launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+
+    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+     echo "✅ launchd 服务已加载并激活（开机自启，不依赖终端）"
+    else
+     echo "⚠️ launchd 已写入但未激活，将回退后台托管模式"
+    fi
+   else
+    echo "⚠️ 未发现 launchd plist: $plist_path"
+   fi
+  else
+   echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
+  fi
  else
   echo "⚠️ Gateway 系统服务安装失败，将使用后台托管模式"
  fi
@@ -1333,7 +1397,7 @@ manage_installation(){
     fi
     hash -r
     rm -rf "$OPENCLAW_DIR"
-    rm -f /usr/local/bin/ocm
+    rm -f /usr/local/bin/ocm /opt/homebrew/bin/ocm
 
     echo "✅ OpenClaw 已彻底卸载完成。"
    else
