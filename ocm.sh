@@ -602,7 +602,7 @@ install_openclaw() {
     launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
 
     if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
-     echo "✅ launchd 服务已加载并激活（开机自启，不依赖终端）"
+     echo "✅ launchd 服务已加载并激活"
     else
      echo "⚠️ launchd 已写入但未激活，将回退后台托管模式"
     fi
