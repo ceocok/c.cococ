@@ -534,6 +534,15 @@ install_openclaw() {
  fi
 
  install_ocm_command || true
+
+ # 安装 Gateway 系统服务（macOS launchd / Linux systemd）
+ echo "⚙️ 正在安装 Gateway 系统服务..."
+ if openclaw gateway install >/dev/null 2>&1; then
+  echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
+ else
+  echo "⚠️ Gateway 系统服务安装失败，将使用后台托管模式"
+ fi
+
  restart_openclaw || { pause; return 1; }
  echo -e "${GREEN}✅ Gateway 已启动，监听端口: $(jq -r '.gateway.port // 52525' "$CONFIG")，以后可直接输入 ${YELLOW}ocm${GREEN} 启动本脚本${RESET}"
  echo -e "${CYAN}🎉 安装完成。${RESET}"
