@@ -206,23 +206,20 @@ gateway_is_listening(){
  return 1
 }
 
-restart_openclaw(){
+start_openclaw(){
  if ! cmd_exists openclaw; then
-  echo "❌ 未检测到 openclaw 命令，无法重启 Gateway"
+  echo "❌ 未检测到 openclaw 命令，无法启动 Gateway"
   return 1
+ fi
+
+ if gateway_is_listening; then
+  return 0
  fi
 
  local i openclaw_bin
  openclaw_bin=$(cmd_path openclaw)
- stop_openclaw
 
- for i in {1..10}; do
-  if ! gateway_is_listening; then
-   break
-  fi
-  sleep 1
- done
-
+ # 先尝试系统服务（macOS launchd / Linux systemd）
  if quiet_run openclaw gateway start; then
   for i in {1..10}; do
    if gateway_is_listening; then
@@ -232,6 +229,7 @@ restart_openclaw(){
   done
  fi
 
+ # 服务不可用时，回退到前台命令的后台托管模式
  if need_cmd setsid; then
   setsid "$openclaw_bin" gateway run </dev/null >> "$LOG_FILE" 2>&1 &
  else
@@ -248,8 +246,26 @@ restart_openclaw(){
  done
 
  echo "❌ Gateway 启动失败，请检查日志: $LOG_FILE"
- tail -n 12 "$LOG_FILE" 2>/dev/null || true
+ tail -n 20 "$LOG_FILE" 2>/dev/null || true
  return 1
+}
+
+restart_openclaw(){
+ if ! cmd_exists openclaw; then
+  echo "❌ 未检测到 openclaw 命令，无法重启 Gateway"
+  return 1
+ fi
+
+ local i
+ stop_openclaw
+ for i in {1..10}; do
+  if ! gateway_is_listening; then
+   break
+  fi
+  sleep 1
+ done
+
+ start_openclaw
 }
 
 stop_openclaw(){
@@ -1176,8 +1192,9 @@ gateway_manage(){
 
  echo -e "\n--- Gateway 管理 ---"
  echo "当前状态: $gw_status (端口: $gw_port)"
- echo "1) 重启 Gateway"
- echo "2) 停止 Gateway"
+ echo "1) 启动 Gateway"
+ echo "2) 重启 Gateway"
+ echo "3) 停止 Gateway"
  echo "0) 返回"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " gw_choice
@@ -1185,12 +1202,25 @@ gateway_manage(){
  case $gw_choice in
   1)
    if gateway_json_check; then
-    restart_openclaw
-    echo "✅ Gateway 已重启"
+    if start_openclaw; then
+     echo "✅ Gateway 已启动"
+    else
+     echo "❌ Gateway 启动失败"
+    fi
    fi
    pause
    ;;
   2)
+   if gateway_json_check; then
+    if restart_openclaw; then
+     echo "✅ Gateway 已重启"
+    else
+     echo "❌ Gateway 重启失败"
+    fi
+   fi
+   pause
+   ;;
+  3)
    if gateway_json_check; then
     stop_openclaw
     echo "✅ Gateway 已停止"
