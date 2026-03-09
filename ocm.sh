@@ -625,7 +625,7 @@ install_openclaw() {
     echo "⚠️ launchd 已写入但未激活，将回退后台托管模式"
    fi
   else
-   echo "✅ Gateway 系统服务已安装（开机自启，不依赖终端）"
+   echo "✅ Gateway 系统服务已安装"
   fi
  else
   echo "⚠️ Gateway 系统服务安装失败，将使用后台托管模式"
