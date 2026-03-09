@@ -402,6 +402,49 @@ current_install_method(){
  fi
 }
 
+npm_global_root(){
+ npm root -g 2>/dev/null || echo "/usr/lib/node_modules"
+}
+
+cleanup_openclaw_global_residue(){
+ local root
+ root=$(npm_global_root)
+ [ -d "$root" ] || return 0
+ rm -rf "$root/openclaw" "$root"/.openclaw-* 2>/dev/null || true
+}
+
+install_openclaw_package(){
+ local log_file install_ok=false
+ log_file=$(mktemp)
+
+ if npm install -g openclaw@latest >"$log_file" 2>&1; then
+  install_ok=true
+ elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
+  install_ok=true
+ else
+  if grep -q 'ENOTEMPTY' "$log_file" 2>/dev/null; then
+   echo "⚠️ 检测到旧的 npm 全局安装残留，正在自动清理后重试..."
+   npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
+   cleanup_openclaw_global_residue
+   npm cache verify >/dev/null 2>&1 || true
+   if npm install -g openclaw@latest >"$log_file" 2>&1; then
+    install_ok=true
+   elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
+    install_ok=true
+   fi
+  fi
+ fi
+
+ if [[ "$install_ok" != "true" ]]; then
+  cat "$log_file"
+  rm -f "$log_file"
+  return 1
+ fi
+
+ rm -f "$log_file"
+ return 0
+}
+
 upgrade_openclaw(){
  echo -e "\n🔄 正在升级 OpenClaw..."
  quiet_run openclaw update status || true
@@ -609,7 +652,7 @@ install_openclaw(){
  else
   prepare_node_env || return 1
   echo "⚙️ 正在安装 OpenClaw..."
-  npm install -g openclaw@latest >/dev/null || sudo npm install -g openclaw@latest >/dev/null || {
+  install_openclaw_package || {
    echo "❌ 安装失败"
    pause
    return 1
@@ -1526,6 +1569,7 @@ manage_installation(){
     safe_pkill_gateway
     if need_cmd pnpm; then pnpm remove -g openclaw >/dev/null 2>&1 || true; fi
     if need_cmd npm; then npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true; fi
+    cleanup_openclaw_global_residue
     hash -r
     echo "✅ OpenClaw 程序已卸载，数据已保留。"
    else
@@ -1541,6 +1585,7 @@ manage_installation(){
     safe_pkill_gateway
     if need_cmd pnpm; then pnpm remove -g openclaw >/dev/null 2>&1 || true; fi
     if need_cmd npm; then npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true; fi
+    cleanup_openclaw_global_residue
     hash -r
     rm -rf "$OPENCLAW_DIR"
     rm -f /usr/local/bin/ocm /opt/homebrew/bin/ocm
