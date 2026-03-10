@@ -1552,7 +1552,7 @@ if (-not $env:OCM_NO_LOOP) {
             '9' { if (Test-Config) { Gateway-Manage } }
             '10' { if (Test-Config) { Show-GatewayToken } }
             '11' { Manage-Installation }
-            '0' { break }
+            '0' { return }
             default { }
         }
     }
