@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ScriptUrl = 'https://in.cnno.de/ocm.ps1'
+$ScriptUrl = 'https://raw.githubusercontent.com/ceocok/c.cococ/main/ocm.ps1'
 $IsWindowsCompat = ($env:OS -eq 'Windows_NT')
 $HomeDir = [Environment]::GetFolderPath('UserProfile')
 $OpenClawDir = Join-Path $HomeDir '.openclaw'
