@@ -36,7 +36,7 @@ declare -A script_names=(
 declare -A scripts=(
   ["1"]="Snell.sh"
   ["2"]="vmess.sh"
-  ["3"]="warp.sh"
+  ["3"]="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh"
   ["4"]="hy.sh"
   ["5"]="bbr.sh"
   ["6"]="kejilion.sh"
@@ -70,26 +70,41 @@ show_menu() {
 
 # 下载并执行脚本，支持 curl 或 wget
 run_script() {
-  local script_name="$1"
-  local url="$BASE_URL/$script_name"
-  echo "📥 正在下载并执行 $script_name ..."
+  local input_path="$1"
+  local url
+  local save_name
 
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o /tmp/$script_name
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO /tmp/$script_name "$url"
+  # 1. 提取文件名（处理 URL 里的文件名）
+  # 比如从 http://.../warp.sh 提取出 warp.sh
+  save_name=$(basename "$input_path")
+
+  # 2. 判断输入的是否是完整 URL
+  if [[ "$input_path" == http* ]]; then
+    url="$input_path"
   else
-    echo "❌ 未找到 curl 或 wget，无法下载脚本。请先安装其中一个工具。"
+    url="$BASE_URL/$input_path"
+  fi
+
+  echo "📥 正在从 $url 下载并执行..."
+
+  # 3. 下载到 /tmp
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "/tmp/$save_name"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "/tmp/$save_name" "$url"
+  else
+    echo "❌ 未找到 curl 或 wget"
     return 1
   fi
 
   if [ $? -ne 0 ]; then
-    echo "❌ 下载失败，请检查网络或脚本路径：$url"
+    echo "❌ 下载失败，请检查链接：$url"
     return 1
   fi
 
-  chmod +x /tmp/$script_name
-  bash /tmp/$script_name
+  # 4. 执行
+  chmod +x "/tmp/$save_name"
+  bash "/tmp/$save_name"
 }
 
 
