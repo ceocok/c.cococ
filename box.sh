@@ -34,12 +34,12 @@ declare -A script_names=(
 
 # 功能编号对应脚本名
 declare -A scripts=(
-  ["1"]="Snell.sh"
+  ["1"]="https://git.io/Snell.sh"
   ["2"]="vmess.sh"
   ["3"]="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh"
   ["4"]="hy.sh"
   ["5"]="bbr.sh"
-  ["6"]="kejilion.sh"
+  ["6"]="https://github.com/kejilion/sh/blob/main/kejilion.sh"
   ["7"]="tool.sh"
   ["8"]="docker.sh"
   ["9"]="dnsunlock.sh"
