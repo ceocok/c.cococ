@@ -19,7 +19,7 @@ $SERVICE_NAME   = "frpc"
 $ARCH           = "amd64" # or "386" for 32-bit systems
 
 # --- Proxied Download URLs ---
-$PROXY_PREFIX   = "https://feria.eu.org/"
+$PROXY_PREFIX   = "https://gh-proxy.org/"
 $frpOriginalUrl = "https://github.com/fatedier/frp/releases/download/v$($FRP_VERSION)/frp_${FRP_VERSION}_windows_${ARCH}.zip"
 $nssmOriginalUrl= "https://raw.githubusercontent.com/ceocok/c.cococ/refs/heads/main/nssm.exe"
 
