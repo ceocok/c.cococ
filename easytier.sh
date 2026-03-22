@@ -31,7 +31,7 @@ SERVICE_NAME="easytier"
 LOG_FILE="/var/log/easytier.log"
 
 # 原始下载地址
-GITHUB_API_URL="https://gh-proxy.com/https://api.github.com/repos/EasyTier/EasyTier/releases/latest"
+GITHUB_API_URL="https://api.github.com/repos/EasyTier/EasyTier/releases/latest"
 
 # --- 辅助函数 ---
 check_root() {
