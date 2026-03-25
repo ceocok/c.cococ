@@ -9,6 +9,7 @@ $Config = Join-Path $OpenClawDir 'openclaw.json'
 $LogFile = Join-Path $OpenClawDir 'gateway.log'
 $BackupDir = Join-Path $OpenClawDir 'backups'
 $DirtyModelsFile = Join-Path $OpenClawDir '.ocm-dirty-models'
+$script:GitCmdPath = ''
 
 function Pause-OCM {
     Read-Host '回车继续...'
@@ -475,6 +476,16 @@ function Refresh-PathEnv {
     if ($env:ProgramFiles) {
         $nodeDir = Join-Path $env:ProgramFiles 'nodejs'
         if (Test-Path $nodeDir) { $extraPaths += $nodeDir }
+        $gitCmdDir = Join-Path $env:ProgramFiles 'Git\cmd'
+        $gitBinDir = Join-Path $env:ProgramFiles 'Git\bin'
+        if (Test-Path $gitCmdDir) { $extraPaths += $gitCmdDir }
+        if (Test-Path $gitBinDir) { $extraPaths += $gitBinDir }
+    }
+    if ($env:${ProgramFiles(x86)}) {
+        $gitCmdDir86 = Join-Path $env:${ProgramFiles(x86)} 'Git\cmd'
+        $gitBinDir86 = Join-Path $env:${ProgramFiles(x86)} 'Git\bin'
+        if (Test-Path $gitCmdDir86) { $extraPaths += $gitCmdDir86 }
+        if (Test-Path $gitBinDir86) { $extraPaths += $gitBinDir86 }
     }
 
     foreach ($p in $extraPaths) {
@@ -483,6 +494,48 @@ function Refresh-PathEnv {
 
     if ($parts.Count -gt 0) {
         $env:Path = ($parts -join ';')
+    }
+}
+
+function Get-GitCmd {
+    if (-not [string]::IsNullOrWhiteSpace($script:GitCmdPath) -and (Test-Path $script:GitCmdPath)) {
+        return $script:GitCmdPath
+    }
+
+    $candidates = @()
+    foreach ($name in @('git.exe','git.cmd','git')) {
+        try {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            if ($cmd -and $cmd.Source) { $candidates += $cmd.Source }
+        } catch {}
+    }
+
+    if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles 'Git\cmd\git.exe')
+        $candidates += (Join-Path $env:ProgramFiles 'Git\bin\git.exe')
+    }
+    if ($env:${ProgramFiles(x86)}) {
+        $candidates += (Join-Path $env:${ProgramFiles(x86)} 'Git\cmd\git.exe')
+        $candidates += (Join-Path $env:${ProgramFiles(x86)} 'Git\bin\git.exe')
+    }
+
+    foreach ($candidate in $candidates | Select-Object -Unique) {
+        if ($candidate -and (Test-Path $candidate)) {
+            $script:GitCmdPath = $candidate
+            return $candidate
+        }
+    }
+    return ''
+}
+
+function Test-GitReady {
+    $gitCmd = Get-GitCmd
+    if ([string]::IsNullOrWhiteSpace($gitCmd)) { return $false }
+    try {
+        & $gitCmd --version | Out-Null
+        return $true
+    } catch {
+        return $false
     }
 }
 
@@ -521,14 +574,14 @@ function Ensure-PackageManager {
 }
 
 function Install-Git {
-    if (Test-Cmd 'git') { return $true }
+    if (Test-GitReady) { return $true }
     Write-Host '⚙️ 未检测到 Git，正在自动安装...'
     if (-not (Ensure-PackageManager)) { return $false }
 
     if (Test-Cmd 'winget') {
         Write-Host 'ℹ️ 使用 winget 安装 Git ...'
         try {
-            $wingetGitOutput = (& winget install Git.Git --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-String)
+            $wingetGitOutput = (& winget install --id Git.Git -e --source winget --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-String)
             if (-not [string]::IsNullOrWhiteSpace($wingetGitOutput)) {
                 Write-Host $wingetGitOutput.Trim()
             }
@@ -538,7 +591,8 @@ function Install-Git {
         }
     }
 
-    if ((-not (Test-Cmd 'git')) -and (Test-Cmd 'choco')) {
+    Refresh-PathEnv
+    if ((-not (Test-GitReady)) -and (Test-Cmd 'choco')) {
         Write-Host 'ℹ️ 使用 Chocolatey 安装 Git ...'
         try {
             $chocoGitOutput = (& choco install git -y --no-progress 2>&1 | Out-String)
@@ -553,12 +607,17 @@ function Install-Git {
     }
 
     Refresh-PathEnv
-    if (Test-Cmd 'git') {
-        try { Write-Host ("✅ Git 已就绪: {0}" -f ((& git --version) | Out-String).Trim()) } catch {}
-        return $true
+    $gitCmd = Get-GitCmd
+    if (-not [string]::IsNullOrWhiteSpace($gitCmd)) {
+        try {
+            Write-Host ("✅ Git 已就绪: {0}" -f ((& $gitCmd --version) | Out-String).Trim())
+            Write-Host ("ℹ️ Git 路径: {0}" -f $gitCmd)
+            return $true
+        } catch {}
     }
 
     Write-Host '❌ Git 安装后仍不可用，请检查系统安装状态后重试。'
+    Write-Host 'ℹ️ 如果系统刚写入 PATH 但当前会话仍不可见，本脚本已尝试直接定位 git.exe；若仍失败，再重新打开 PowerShell。'
     return $false
 }
 
@@ -663,12 +722,16 @@ function Install-OpenClawPackage {
         return $false
     }
 
+    $gitCmd = Get-GitCmd
     $npmCmd = Get-NpmCmd
     if ([string]::IsNullOrWhiteSpace($npmCmd)) {
         Write-Host '❌ 未找到 npm 可执行文件。'
         return $false
     }
     Write-Host ("ℹ️ 使用 npm 命令: {0}" -f $npmCmd)
+    if (-not [string]::IsNullOrWhiteSpace($gitCmd)) {
+        Write-Host ("ℹ️ 使用 Git 命令: {0}" -f $gitCmd)
+    }
 
     try {
         $stdoutLog = Join-Path $env:TEMP 'ocm-npm-install.stdout.log'
@@ -676,7 +739,19 @@ function Install-OpenClawPackage {
         if (Test-Path $stdoutLog) { Remove-Item $stdoutLog -Force -ErrorAction SilentlyContinue }
         if (Test-Path $stderrLog) { Remove-Item $stderrLog -Force -ErrorAction SilentlyContinue }
 
+        $oldGit = $env:GIT
+        $oldGitExe = $env:GIT_EXEC_PATH
+        if (-not [string]::IsNullOrWhiteSpace($gitCmd)) {
+            $env:GIT = $gitCmd
+            $gitParent = Split-Path $gitCmd -Parent
+            if (Test-Path $gitParent) { $env:GIT_EXEC_PATH = $gitParent }
+        }
+
         $proc = Start-Process -FilePath $npmCmd -ArgumentList 'install','-g','openclaw@latest' -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru -Wait -WindowStyle Hidden
+
+        if ($null -ne $oldGit) { $env:GIT = $oldGit } else { Remove-Item Env:GIT -ErrorAction SilentlyContinue }
+        if ($null -ne $oldGitExe) { $env:GIT_EXEC_PATH = $oldGitExe } else { Remove-Item Env:GIT_EXEC_PATH -ErrorAction SilentlyContinue }
+
         $combined = @()
         if (Test-Path $stdoutLog) { $combined += Get-Content $stdoutLog -ErrorAction SilentlyContinue }
         if (Test-Path $stderrLog) { $combined += Get-Content $stderrLog -ErrorAction SilentlyContinue }
@@ -706,7 +781,20 @@ function Install-OpenClawPackage {
                 $retryStderr = Join-Path $env:TEMP 'ocm-npm-install.retry.stderr.log'
                 if (Test-Path $retryStdout) { Remove-Item $retryStdout -Force -ErrorAction SilentlyContinue }
                 if (Test-Path $retryStderr) { Remove-Item $retryStderr -Force -ErrorAction SilentlyContinue }
+
+                $oldGit = $env:GIT
+                $oldGitExe = $env:GIT_EXEC_PATH
+                if (-not [string]::IsNullOrWhiteSpace($gitCmd)) {
+                    $env:GIT = $gitCmd
+                    $gitParent = Split-Path $gitCmd -Parent
+                    if (Test-Path $gitParent) { $env:GIT_EXEC_PATH = $gitParent }
+                }
+
                 $retryProc = Start-Process -FilePath $npmCmd -ArgumentList 'install','-g','openclaw@latest' -RedirectStandardOutput $retryStdout -RedirectStandardError $retryStderr -PassThru -Wait -WindowStyle Hidden
+
+                if ($null -ne $oldGit) { $env:GIT = $oldGit } else { Remove-Item Env:GIT -ErrorAction SilentlyContinue }
+                if ($null -ne $oldGitExe) { $env:GIT_EXEC_PATH = $oldGitExe } else { Remove-Item Env:GIT_EXEC_PATH -ErrorAction SilentlyContinue }
+
                 $retryCombined = @()
                 if (Test-Path $retryStdout) { $retryCombined += Get-Content $retryStdout -ErrorAction SilentlyContinue }
                 if (Test-Path $retryStderr) { $retryCombined += Get-Content $retryStderr -ErrorAction SilentlyContinue }
@@ -1386,6 +1474,7 @@ function Add-Channel {
             $cn = Read-Host 'channel 名称'
             $ct = Read-Host 'Access Token'
             $pid = Read-Host 'Phone Number ID'
+
             $cfg.channels | Add-Member -Force -NotePropertyName $cn -NotePropertyValue ([pscustomobject]@{ type = 'whatsapp'; token = $ct; phoneId = $pid; enabled = $true })
         }
         '2' {
