@@ -481,9 +481,9 @@ function Refresh-PathEnv {
         if (Test-Path $gitCmdDir) { $extraPaths += $gitCmdDir }
         if (Test-Path $gitBinDir) { $extraPaths += $gitBinDir }
     }
-    if ($env:'ProgramFiles(x86)') {
-        $gitCmdDir86 = Join-Path $env:'ProgramFiles(x86)' 'Git\cmd'
-        $gitBinDir86 = Join-Path $env:'ProgramFiles(x86)' 'Git\bin'
+    if ($env:${ProgramFiles(x86)}) {
+        $gitCmdDir86 = Join-Path $env:${ProgramFiles(x86)} 'Git\cmd'
+        $gitBinDir86 = Join-Path $env:${ProgramFiles(x86)} 'Git\bin'
         if (Test-Path $gitCmdDir86) { $extraPaths += $gitCmdDir86 }
         if (Test-Path $gitBinDir86) { $extraPaths += $gitBinDir86 }
     }
@@ -514,9 +514,9 @@ function Get-GitCmd {
         $candidates += (Join-Path $env:ProgramFiles 'Git\cmd\git.exe')
         $candidates += (Join-Path $env:ProgramFiles 'Git\bin\git.exe')
     }
-    if ($env:'ProgramFiles(x86)') {
-        $candidates += (Join-Path $env:'ProgramFiles(x86)' 'Git\cmd\git.exe')
-        $candidates += (Join-Path $env:'ProgramFiles(x86)' 'Git\bin\git.exe')
+    if ($env:${ProgramFiles(x86)}) {
+        $candidates += (Join-Path $env:${ProgramFiles(x86)} 'Git\cmd\git.exe')
+        $candidates += (Join-Path $env:${ProgramFiles(x86)} 'Git\bin\git.exe')
     }
 
     foreach ($candidate in $candidates | Select-Object -Unique) {
