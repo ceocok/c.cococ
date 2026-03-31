@@ -214,25 +214,19 @@ install_easytier() {
 	local temp_file; temp_file=$(mktemp)
 	
 	# 尝试直接下载
-	echo "2. 尝试直接下载: ${download_url}"
-	if curl -L --progress-bar -o "$temp_file" "$download_url" && unzip -t "$temp_file" &> /dev/null; then
-		download_success=true
-		echo -e "${GREEN}直连下载成功！${NC}"
-	else
-		echo -e "${YELLOW}直连下载失败或文件损坏，开始尝试代理节点...${NC}"
-		# 遍历代理池尝试下载
-		for proxy in "${GITHUB_PROXIES[@]}"; do
-			local proxy_url="https://${proxy}/${download_url}"
-			echo "-> 尝试代理: ${proxy_url}"
-			if curl -L --progress-bar -o "$temp_file" "$proxy_url" && unzip -t "$temp_file" &> /dev/null; then
-				download_success=true
-				echo -e "${GREEN}代理节点 ($proxy) 下载成功！${NC}"
-				break
-			else
-				echo -e "${YELLOW}节点 $proxy 失败或文件无效，切换下一个...${NC}"
-			fi
-		done
-	fi
+echo "2. 使用代理节点下载..."
+
+for proxy in "${GITHUB_PROXIES[@]}"; do
+    local proxy_url="https://${proxy}/${download_url}"
+    echo "-> 尝试代理: ${proxy_url}"
+    if curl -L --progress-bar -o "$temp_file" "$proxy_url" && unzip -t "$temp_file" &> /dev/null; then
+        download_success=true
+        echo -e "${GREEN}代理节点 ($proxy) 下载成功！${NC}"
+        break
+    else
+        echo -e "${YELLOW}节点 $proxy 失败或文件无效，切换下一个...${NC}"
+    fi
+done
 
 	if [ "$download_success" = false ]; then
 		echo -e "${RED}错误: 所有下载尝试(直连+代理)均失败，请检查网络连接。${NC}"
