@@ -3,9 +3,7 @@
 # --- 脚本配置 ---
 # 定义备用 Github 代理节点池
 GITHUB_PROXIES=(
-    "ghfast.top"
-    "ghproxy.net"
-    "github.moeyy.xyz"
+    "gh-proxy.com"
 )
 
 # 颜色定义
