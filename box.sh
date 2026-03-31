@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 使用cf代理
-BASE_URL="https://gh-proxy.org/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+BASE_URL="https://gh-proxy.com/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 
 # 显示菜单中文名称
 declare -A script_names=(
@@ -39,7 +39,7 @@ declare -A scripts=(
   ["3"]="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh"
   ["4"]="hy.sh"
   ["5"]="bbr.sh"
-  ["6"]="https://gh-proxy.org/https://github.com/kejilion/sh/blob/main/kejilion.sh"
+  ["6"]="https://gh-proxy.com/https://github.com/kejilion/sh/blob/main/kejilion.sh"
   ["7"]="https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh"
   ["8"]="docker.sh"
   ["9"]="dnsunlock.sh"
