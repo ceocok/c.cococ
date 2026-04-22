@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+ while IFS= read -r _ocm_node_bin; do
+  [[ -n "${_ocm_node_bin:-}" ]] && export PATH="${_ocm_node_bin}:$PATH"
+ done < <(find "$HOME/.nvm/versions/node" -maxdepth 3 -type d -name bin 2>/dev/null | sort -r)
+fi
+
 CONFIG="$HOME/.openclaw/openclaw.json"
 OPENCLAW_DIR="$HOME/.openclaw"
 LOG_FILE="$OPENCLAW_DIR/gateway.log"
@@ -17,6 +24,36 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1; }
 cmd_path(){ command -v "$1" 2>/dev/null || true; }
 cmd_exists(){ local p; p=$(cmd_path "$1"); [[ -n "$p" && -x "$p" ]]; }
 quiet_run(){ "$@" >/dev/null 2>&1; }
+safe_clear(){
+ if [ -t 1 ] && [ -n "${TERM:-}" ]; then
+  clear || true
+ fi
+}
+
+find_openclaw_bin(){
+ local p latest_node latest_node_bin
+ for p in \
+  "$(command -v openclaw 2>/dev/null || true)" \
+  "/opt/homebrew/bin/openclaw" \
+  "/usr/local/bin/openclaw"
+ do
+  [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
+ done
+
+ if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  latest_node=$(find "$HOME/.nvm/versions/node" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n1)
+  latest_node_bin="$latest_node/bin/openclaw"
+  [[ -n "$latest_node" && -x "$latest_node_bin" ]] && { echo "$latest_node_bin"; return 0; }
+ fi
+
+ return 1
+}
+
+openclaw_cmd(){
+ local p
+ p=$(find_openclaw_bin) || return 1
+ echo "$p"
+}
 
 safe_pkill_gateway(){
  if need_cmd pkill; then
@@ -224,6 +261,45 @@ save_config(){
 gateway_port(){ jq -r '.gateway.port // 52525' "$CONFIG" 2>/dev/null || echo 52525; }
 gateway_token(){ jq -r '.gateway.auth.token // ""' "$CONFIG" 2>/dev/null || true; }
 
+mac_console_user(){
+ [[ "${OSTYPE:-}" == darwin* ]] || return 1
+ stat -f '%Su' /dev/console 2>/dev/null || true
+}
+
+mac_console_uid(){
+ local user
+ user=$(mac_console_user)
+ [ -n "$user" ] || return 1
+ id -u "$user" 2>/dev/null || true
+}
+
+mac_running_as_wrong_user(){
+ [[ "${OSTYPE:-}" == darwin* ]] || return 1
+ local console_user current_user
+ console_user=$(mac_console_user)
+ current_user=$(id -un 2>/dev/null || true)
+ [ -n "$console_user" ] || return 1
+ [ "$console_user" = "loginwindow" ] && return 1
+ [ "$current_user" != "$console_user" ]
+}
+
+mac_run_as_console_user(){
+ [[ "${OSTYPE:-}" == darwin* ]] || return 1
+ local console_user console_uid
+ console_user=$(mac_console_user)
+ console_uid=$(mac_console_uid)
+ [ -n "$console_user" ] || return 1
+ [ -n "$console_uid" ] || return 1
+
+ if [ "$(id -un 2>/dev/null || true)" = "$console_user" ]; then
+  "$@"
+ elif need_cmd sudo; then
+  sudo -H -u "$console_user" env HOME="/Users/$console_user" USER="$console_user" LOGNAME="$console_user" "$@"
+ else
+  launchctl asuser "$console_uid" "$@"
+ fi
+}
+
 gateway_health_check(){
  local port url
  port=$(gateway_port)
@@ -240,9 +316,10 @@ gateway_health_check(){
 }
 
 gateway_status_capture(){
- local tmp
+ local tmp openclaw_bin
+ openclaw_bin=$(openclaw_cmd) || return 1
  tmp="/tmp/ocm-gateway-status.$$"
- openclaw gateway status >"$tmp" 2>&1 || true
+ "$openclaw_bin" gateway status >"$tmp" 2>&1 || true
  echo "$tmp"
 }
 
@@ -286,23 +363,34 @@ mac_gateway_plist(){ echo "$HOME/Library/LaunchAgents/$(mac_gateway_label).plist
 
 mac_gateway_service_loaded(){
  [[ "${OSTYPE:-}" == darwin* ]] || return 1
- launchctl print "gui/$(id -u)/$(mac_gateway_label)" >/dev/null 2>&1
+ local uid
+ uid=$(mac_console_uid)
+ [ -n "$uid" ] || return 1
+ launchctl print "gui/${uid}/$(mac_gateway_label)" >/dev/null 2>&1
 }
 
 mac_gateway_service_fix(){
  [[ "${OSTYPE:-}" == darwin* ]] || return 1
 
  local uid label plist_path
- uid=$(id -u)
+ uid=$(mac_console_uid)
  label=$(mac_gateway_label)
  plist_path=$(mac_gateway_plist)
 
+ [ -n "$uid" ] || return 1
  [ -f "$plist_path" ] || return 1
 
- launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
- launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
- launchctl enable "gui/$uid/$label" >/dev/null 2>&1 || true
- launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+ if [ "$(id -un 2>/dev/null || true)" = "$(mac_console_user)" ]; then
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
+  launchctl enable "gui/$uid/$label" >/dev/null 2>&1 || true
+  launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+ else
+  mac_run_as_console_user launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+  mac_run_as_console_user launchctl bootstrap "gui/$uid" "$plist_path" >/dev/null 2>&1 || true
+  mac_run_as_console_user launchctl enable "gui/$uid/$label" >/dev/null 2>&1 || true
+  mac_run_as_console_user launchctl kickstart -k "gui/$uid/$label" >/dev/null 2>&1 || true
+ fi
 
  mac_gateway_service_loaded
 }
@@ -386,8 +474,11 @@ gateway_json_check(){
 }
 
 current_install_method(){
- local method
- method=$(openclaw update status 2>/dev/null | awk -F'│' '/Install/{gsub(/^ +| +$/, "", $3); print $3; exit}')
+ local method openclaw_bin
+ openclaw_bin=$(openclaw_cmd 2>/dev/null || true)
+ if [[ -n "${openclaw_bin:-}" ]]; then
+  method=$("$openclaw_bin" update status 2>/dev/null | awk -F'│' '/Install/{gsub(/^ +| +$/, "", $3); print $3; exit}')
+ fi
  if [[ -n "${method:-}" ]]; then
   echo "$method"
   return 0
@@ -414,23 +505,32 @@ cleanup_openclaw_global_residue(){
 }
 
 install_openclaw_package(){
+ local manager="${1:-auto}"
  local log_file install_ok=false
  log_file=$(mktemp)
 
- if npm install -g openclaw@latest >"$log_file" 2>&1; then
-  install_ok=true
- elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
-  install_ok=true
- else
-  if grep -q 'ENOTEMPTY' "$log_file" 2>/dev/null; then
-   echo "⚠️ 检测到旧的 npm 全局安装残留，正在自动清理后重试..."
-   npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
-   cleanup_openclaw_global_residue
-   npm cache verify >/dev/null 2>&1 || true
-   if npm install -g openclaw@latest >"$log_file" 2>&1; then
-    install_ok=true
-   elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
-    install_ok=true
+ if [[ "$manager" == "pnpm" ]] && need_cmd pnpm; then
+  if pnpm add -g openclaw@latest >"$log_file" 2>&1; then
+   install_ok=true
+  fi
+ fi
+
+ if [[ "$install_ok" != "true" ]]; then
+  if npm install -g openclaw@latest >"$log_file" 2>&1; then
+   install_ok=true
+  elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
+   install_ok=true
+  else
+   if grep -q 'ENOTEMPTY' "$log_file" 2>/dev/null; then
+    echo "⚠️ 检测到旧的 npm 全局安装残留，正在自动清理后重试..."
+    npm uninstall -g openclaw >/dev/null 2>&1 || sudo npm uninstall -g openclaw >/dev/null 2>&1 || true
+    cleanup_openclaw_global_residue
+    npm cache verify >/dev/null 2>&1 || true
+    if npm install -g openclaw@latest >"$log_file" 2>&1; then
+     install_ok=true
+    elif need_cmd sudo && sudo npm install -g openclaw@latest >"$log_file" 2>&1; then
+     install_ok=true
+    fi
    fi
   fi
  fi
@@ -447,9 +547,17 @@ install_openclaw_package(){
 
 upgrade_openclaw(){
  echo -e "\n🔄 正在升级 OpenClaw..."
- quiet_run openclaw update status || true
 
- local method
+ local before_version after_version openclaw_bin method
+ before_version=$(get_openclaw_version)
+ openclaw_bin=$(openclaw_cmd 2>/dev/null || true)
+ [[ -n "${openclaw_bin:-}" ]] && quiet_run "$openclaw_bin" update status || true
+
+ prepare_node_env || {
+  echo "❌ Node.js 环境准备失败，升级中止。"
+  return 1
+ }
+
  method=$(current_install_method || true)
  case "$method" in
   pnpm)
@@ -457,21 +565,26 @@ upgrade_openclaw(){
    ;;
  esac
 
- case "$method" in
-  pnpm)
-   pnpm add -g openclaw@latest >/dev/null
-   ;;
-  npm|"")
-   npm install -g openclaw@latest >/dev/null || sudo npm install -g openclaw@latest >/dev/null
-   ;;
-  *)
-   npm install -g openclaw@latest >/dev/null || sudo npm install -g openclaw@latest >/dev/null
-   ;;
- esac
+ if ! install_openclaw_package "$method"; then
+  echo "❌ OpenClaw 升级失败。"
+  return 1
+ fi
 
  hash -r
- restart_openclaw
- echo "✅ 升级完成。"
+ openclaw_bin=$(openclaw_cmd 2>/dev/null || true)
+ if [[ -z "${openclaw_bin:-}" ]]; then
+  echo "❌ 升级后仍未检测到 openclaw 命令，请检查 npm 全局 PATH。"
+  return 1
+ fi
+
+ after_version=$(get_openclaw_version)
+
+ if ! restart_openclaw; then
+  echo "❌ OpenClaw 已升级到 ${after_version}，但 Gateway 重启失败。"
+  return 1
+ fi
+
+ echo "✅ 升级完成：${before_version} → ${after_version}"
 }
 
 generate_token(){
@@ -668,17 +781,27 @@ install_openclaw(){
  install_ocm_command || true
 
  echo "⚙️ 正在安装 Gateway 系统服务..."
- if openclaw gateway install >/dev/null 2>&1; then
-  echo "✅ Gateway 系统服务已安装"
-  if [[ "${OSTYPE:-}" == darwin* ]]; then
+ if [[ "${OSTYPE:-}" == darwin* ]] && mac_running_as_wrong_user; then
+  echo "ℹ️ 检测到当前以 $(id -un) 身份运行，但桌面登录用户是 $(mac_console_user)，将切换到桌面用户安装 LaunchAgent"
+ fi
+
+ if [[ "${OSTYPE:-}" == darwin* ]]; then
+  if mac_run_as_console_user openclaw gateway install >/dev/null 2>&1; then
+   echo "✅ Gateway 系统服务已安装"
    if mac_gateway_service_fix; then
     echo "✅ macOS LaunchAgent 已 reload 并激活"
    else
     echo "⚠️ LaunchAgent 已写入但未成功激活，将尝试后台托管模式"
    fi
+  else
+   echo "⚠️ Gateway 系统服务安装失败，将回退后台托管模式"
   fi
  else
-  echo "⚠️ Gateway 系统服务安装失败，将回退后台托管模式"
+  if openclaw gateway install >/dev/null 2>&1; then
+   echo "✅ Gateway 系统服务已安装"
+  else
+   echo "⚠️ Gateway 系统服务安装失败，将回退后台托管模式"
+  fi
  fi
 
  restart_openclaw || { pause; return 1; }
@@ -1600,7 +1723,7 @@ manage_installation(){
 }
 
 menu(){
- clear
+ safe_clear
  echo "🍀 OpenClaw 全能管理助手 stable+"
  echo "------------------------------------------------"
  printf "%-3s %s\n" "1."  "🚀 安装 OpenClaw"
