@@ -70,8 +70,6 @@ get_public_ip() {
     # 常见的虚拟隧道接口，用于在本地检测时排除它们
     local tunnel_interfaces='(wg-cf|warp|ts-|tailscale|tun)' 
 
-    # (已隐藏) printf "%b" "${C_CYAN}正在检测 Public IP (优先 curl IPv4)...${C_NC}\n"
-
     # 1. 优先尝试 curl IPv4
     IP=$(curl -s4 icanhazip.com)
     [ -z "$IP" ] && IP=$(curl -s4 ifconfig.me/ip)
@@ -127,8 +125,6 @@ get_public_ip() {
     if [ -z "$PUBLIC_IP" ]; then
         printf "%b" "\n${C_RED}错误: 无法获取任何有效的 Public IP (v4 或 v6)。${C_NC}\n"
         printf "%b" "${C_RED}所有 DNS 检查将被跳过。请手动确保您的域名指向正确。${C_NC}\n\n"
-    # else
-        # (已隐藏) printf "%b" "脚本将使用 ${C_WHITE}$IP_TYPE${C_NC} (${C_WHITE}$PUBLIC_IP${C_NC}) 进行 DNS 检查。\n"
     fi
 }
 
@@ -589,32 +585,12 @@ restore_sites() {
     
     if [ "$?" -eq 0 ]; then
         printf "%b" " ${C_GREEN}完成！${C_NC}\n"
-        printf "%b" "${C_GREEN}恢复成功！${C_NC} E正在自动重载 Caddy...\n"
+        printf "%b" "${C_GREEN}恢复成功！${C_NC} 正在自动重载 Caddy...\n"
         reload_caddy
     else
         printf "%b" " ${C_RED}失败！${C_NC}\n"
         printf "%b" "${C_RED}恢复失败。文件可能已损坏或 $restore_dest 目录权限不足。${C_NC}\n"
     fi
-}
-
-backup_restore_menu_7() {
-    while true; do
-        printf "%b" "\n"
-        printf "%b" "${C_WHITE}--- 7. 备份/恢复 Caddy ---${C_NC}\n"
-        printf "%b" " ${C_YELLOW}1. 备份所有站点到/root/caddyman_backup.tar.gz${C_NC}\n"
-        printf "%b" " ${C_YELLOW}2. 从/root/caddyman_backup.tar.gz 恢复站点${C_NC}\n"
-        printf "%b" " ${C_RED}0. 返回主菜单${C_NC}\n"
-        printf "%b" "${C_WHITE}-----------------------------------${C_NC}\n"
-        printf "%b" "${C_YELLOW}请输入您的选择 [0-2]: ${C_NC}"
-        read choice
-
-        case "$choice" in
-            1) backup_sites ;;
-            2) restore_sites ;;
-            0) break ;;
-            *) printf "%b" "${C_RED}无效输入，请输入 0 到 2 之间的数字。${C_NC}\n" ;;
-        esac
-    done
 }
 
 add_proxy() {
@@ -624,15 +600,19 @@ add_proxy() {
     
     while true; do
         printf "%b" "\n"
-        printf "%b" "${C_YELLOW}请输入域名 (留空则退出): ${C_NC}"
-        read domain
-        [ -z "$domain" ] && break
+        printf "%b" "${C_YELLOW}请输入域名 (支持多个，用空格或逗号分隔，留空则退出): ${C_NC}"
+        read domain_input
+        [ -z "$domain_input" ] && break
 
-        printf "%b" "${C_YELLOW}请输入 ${C_WHITE}$domain${C_YELLOW} 的本地端口: ${C_NC}"
+        # 将输入的逗号全部统一替换为空格，方便通过 for 循环遍历
+        local domains
+        domains=$(echo "$domain_input" | tr ',' ' ')
+
+        printf "%b" "${C_YELLOW}请输入本地端口 (例如 8080): ${C_NC}"
         read proxy_port
         
         if [ -z "$proxy_port" ]; then
-             printf "%b" "${C_RED}端口不能为空，已跳过此域名。${C_NC}\n"
+             printf "%b" "${C_RED}端口不能为空，已跳过此配置。${C_NC}\n"
              continue
         fi
         
@@ -641,23 +621,61 @@ add_proxy() {
             continue
         fi
 
-        if ! check_dns "$domain"; then
-            printf "%b" "${C_RED}DNS 检查失败或被中止，已跳过 $domain。${C_NC}\n"
+        # 初始化变量，用于存储验证通过的域名
+        local valid_domains=""
+        local first_domain=""
+        
+        # 逐个检查输入的域名 DNS
+        for d in $domains; do
+            if check_dns "$d"; then
+                if [ -z "$valid_domains" ]; then
+                    valid_domains="$d"
+                    first_domain="$d" # 将第一个验证通过的域名作为文件名
+                else
+                    valid_domains="$valid_domains, $d"
+                fi
+            else
+                printf "%b" "${C_RED}域名 $d 的 DNS 检查未通过且已中止，将被跳过。${C_NC}\n"
+            fi
+        done
+
+        # 如果所有域名都没通过检查，则跳过本次生成
+        if [ -z "$valid_domains" ]; then
+            printf "%b" "${C_RED}没有有效的域名，未生成配置。${C_NC}\n"
             continue
         fi
         
-        config_file="$CADDYFILE_CONF_D/$domain.caddy"
+        # 使用第一个验证通过的域名作为配置文件的名称
+        config_file="$CADDYFILE_CONF_D/$first_domain.caddy"
         if [ -f "$config_file" ]; then
-            printf "%b" "${C_RED}配置 $config_file 已存在，已跳过。${C_NC}\n"
+            printf "%b" "${C_RED}配置 $config_file 已存在，已跳过。如需修改请先删除旧站点。${C_NC}\n"
             continue
         fi
 
         local proxy_address="http://127.0.0.1:$proxy_port"
-        printf "%b" "   ${C_CYAN}+ 正在准备: ${C_WHITE}$domain${C_CYAN} -> ${C_WHITE}$proxy_address${C_NC}\n"
+        printf "%b" "   ${C_CYAN}+ 正在准备: ${C_WHITE}$valid_domains${C_CYAN} -> ${C_WHITE}$proxy_address${C_NC}\n"
 
+        # 写入新的通用高级模板
         tee "$config_file" > /dev/null << EOL
-$domain {
-    reverse_proxy $proxy_address
+$valid_domains {
+    encode gzip zstd
+
+    reverse_proxy $proxy_address {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Authorization {header.Authorization}
+        header_up Upgrade {header.Upgrade}
+        header_up Connection {header.Connection}
+
+        # 如果上游是自签名 HTTPS：PVE / 群晖 / OpenWRT / ESXi / 
+        # 1. 把上面的代理地址改成 https:// 
+        # 2. 取消下面注释
+        # transport http {
+        #     tls_insecure_skip_verify
+        # }
+    }
 }
 EOL
         count=$((count + 1))
