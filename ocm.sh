@@ -1467,11 +1467,68 @@ delete_channel(){
  pause
 }
 
+configure_telegram_proxy(){
+ local proto_choice proto port proxy new_json current_proxy
+
+ current_proxy=$(jq -r '.channels.telegram.proxy // ""' "$CONFIG" 2>/dev/null || true)
+ echo -e "\n--- 设置 Telegram 代理 ---"
+ if [[ -n "${current_proxy:-}" ]]; then
+  echo "当前 Telegram 代理: $current_proxy"
+ else
+  echo "当前 Telegram 代理: 未设置"
+ fi
+
+ if ! jq -e '.channels.telegram' "$CONFIG" >/dev/null 2>&1; then
+  echo "❌ 尚未配置 channels.telegram，请先添加 Telegram Bot。"
+  return
+ fi
+
+ echo "1) HTTP 代理"
+ echo "2) SOCKS5 代理"
+ echo "3) 删除 Telegram 代理"
+ echo "回车) 返回"
+ read -r -p "请选择代理类型: " proto_choice
+
+ case "$proto_choice" in
+  1) proto="http" ;;
+  2) proto="socks5" ;;
+  3)
+   new_json=$(jq 'del(.channels.telegram.proxy)' "$CONFIG")
+   save_config "$new_json" && restart_openclaw && echo "✅ 已删除 Telegram 代理配置"
+   return
+   ;;
+  ""|0) return ;;
+  *) echo "❌ 无效选择"; return ;;
+ esac
+
+ read -r -p "请输入本机代理端口，例如 6153: " port
+ [[ -n "${port:-}" ]] || { echo "❌ 端口不能为空"; return; }
+ [[ "$port" =~ ^[0-9]+$ ]] || { echo "❌ 端口必须是数字"; return; }
+ if (( port < 1 || port > 65535 )); then
+  echo "❌ 端口范围必须是 1-65535"
+  return
+ fi
+
+ proxy="${proto}://127.0.0.1:${port}"
+ new_json=$(jq --arg proxy "$proxy" '
+  .channels = (.channels // {}) |
+  .channels.telegram = (.channels.telegram // {}) |
+  .channels.telegram.proxy = $proxy
+ ' "$CONFIG")
+
+ if save_config "$new_json" && restart_openclaw; then
+  echo "✅ Telegram 代理已设置为: $proxy"
+ else
+  echo "❌ Telegram 代理配置失败"
+ fi
+}
+
 manage_channels(){
  echo -e "\n--- 管理设置 channel ---"
  echo "1) 添加 channel"
  echo "2) 编辑 channel"
  echo "3) 删除 channel"
+ echo "4) 设置 Telegram 代理"
  echo "回车) 返回主菜单"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " sub_choice
@@ -1480,6 +1537,7 @@ manage_channels(){
   1) add_channel; pause ;;
   2) edit_channel ;;
   3) delete_channel ;;
+  4) configure_telegram_proxy; pause ;;
   ""|0) return ;;
   *) return ;;
  esac
@@ -1576,6 +1634,45 @@ gateway_logs(){
  fi
 }
 
+gateway_logs(){
+ local log_path
+ if [ -f "$OPENCLAW_DIR/logs/gateway.err.log" ]; then
+  log_path="$OPENCLAW_DIR/logs/gateway.err.log"
+ elif [ -f "$LOG_FILE" ]; then
+  log_path="$LOG_FILE"
+ else
+  echo "暂无 Gateway 日志。"
+  return 0
+ fi
+ tail -n 120 "$log_path" 2>/dev/null || true
+}
+
+disable_local_model_discovery(){
+ check_config || return 1
+
+ local new_json
+ new_json=$(jq '
+  .plugins = (.plugins // {}) |
+  .plugins.entries = (.plugins.entries // {}) |
+  .plugins.entries.lmstudio = ((.plugins.entries.lmstudio // {}) + {enabled:false}) |
+  .plugins.entries.ollama = ((.plugins.entries.ollama // {}) + {enabled:false}) |
+  .plugins.entries.vllm = ((.plugins.entries.vllm // {}) + {enabled:false}) |
+  .plugins.entries.comfy = ((.plugins.entries.comfy // {}) + {enabled:false})
+ ' "$CONFIG") || {
+  echo "❌ 生成配置失败。"
+  return 1
+ }
+
+ save_config "$new_json" || return 1
+
+ if restart_openclaw; then
+  echo "✅ 已禁用本地模型探测插件（lmstudio / ollama / vllm / comfy），并重启 Gateway。"
+ else
+  echo "⚠️ 配置已保存，但 Gateway 重启失败。"
+  return 1
+ fi
+}
+
 gateway_manage(){
  local gw_port gw_status
  gw_port=$(gateway_port)
@@ -1612,6 +1709,7 @@ gateway_manage(){
  echo "2) 重启 Gateway"
  echo "3) 停止 Gateway"
  echo "4) 查看日志"
+ echo "5) 关闭本地模型探测（禁用 lmstudio / ollama / vllm / comfy）"
  echo "0) 返回"
  echo "------------------------------------------------"
  read -r -p "请选择操作: " gw_choice
@@ -1631,6 +1729,15 @@ gateway_manage(){
    ;;
   4)
    gateway_logs
+   pause
+   ;;
+  5)
+   read -r -p "确认禁用所有本地模型探测插件并重启 Gateway？(y/N): " confirm
+   if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    disable_local_model_discovery
+   else
+    echo "已取消。"
+   fi
    pause
    ;;
   *) return ;;
