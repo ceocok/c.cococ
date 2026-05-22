@@ -30,6 +30,7 @@ declare -A script_names=(
   ["23"]="Singbox" 
   ["24"]="OpenClaw" 
   ["25"]="系统清理"
+  ["26"]="爱马仕"  
   ["0"]="退出"
 )
 
@@ -59,6 +60,7 @@ declare -A scripts=(
   ["23"]="singbox.sh"  
   ["24"]="ocm.sh"
   ["25"]="clear.sh"
+  ["26"]="hms.sh"  
 )
 
 # 显示菜单
