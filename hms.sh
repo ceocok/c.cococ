@@ -72,6 +72,9 @@ install_hms_command(){
  script_path=$(resolve_script_path)
  target="$(choose_bin_dir)/$SCRIPT_NAME"
  [ -f "$script_path" ] || return 0
+ if [ "$script_path" = "$target" ]; then
+  return 0
+ fi
  dir=$(dirname "$target")
  if mkdir -p "$dir" 2>/dev/null && cat > "$target" 2>/dev/null <<EOF
 #!/usr/bin/env bash
@@ -128,7 +131,7 @@ backup_file(){
  [ -f "$f" ] || return 0
  ensure_dirs
  base=$(basename "$f")
- ts=$(date +%Y%m%d-%H%M%S)
+ ts="$(date +%Y%m%d-%H%M%S)-$$-$RANDOM"
  cp "$f" "$BACKUP_DIR/$base.$ts.bak"
  old_backups=$(find "$BACKUP_DIR" -type f -name "$base.*.bak" -print 2>/dev/null | sort -r | tail -n +16 || true)
  if [ -n "$old_backups" ]; then
@@ -137,6 +140,10 @@ backup_file(){
 }
 
 backup_config(){ backup_file "$CONFIG"; backup_file "$ENV_FILE"; }
+
+HMS_CONFIG_BATCH=0
+config_batch_start(){ backup_file "$CONFIG"; HMS_CONFIG_BATCH=1; }
+config_batch_end(){ HMS_CONFIG_BATCH=0; }
 
 check_hermes(){
  if ! hermes_exists; then
@@ -397,7 +404,9 @@ PY
 hermes_config_set(){
  local key="$1" val="$2"
  check_hermes || return 1
- backup_file "$CONFIG"
+ if [ "${HMS_CONFIG_BATCH:-0}" != "1" ]; then
+  backup_file "$CONFIG"
+ fi
  hermes config set "$key" "$val"
 }
 
@@ -422,14 +431,149 @@ provider_env_name(){
  esac
 }
 
+model_value(){
+ local field="$1"
+ [ -f "$CONFIG" ] || return 0
+ python3 - "$CONFIG" "$field" <<'PY' 2>/dev/null || true
+import sys, pathlib
+path = pathlib.Path(sys.argv[1])
+field = sys.argv[2]
+lines = path.read_text(errors='ignore').splitlines()
+in_model = False
+for line in lines:
+    if line.startswith('model:'):
+        in_model = True
+        continue
+    if in_model and line and not line.startswith((' ', '\t')):
+        break
+    if in_model:
+        stripped = line.strip()
+        if stripped.startswith(field + ':'):
+            print(stripped.split(':', 1)[1].strip().strip('"').strip("'"))
+            break
+PY
+}
+
+show_model_summary(){
+ local provider model base_url api_mode api_key api_mode_desc
+ provider=$(model_value provider)
+ model=$(model_value default)
+ base_url=$(model_value base_url)
+ api_mode=$(model_value api_mode)
+ api_key=$(model_value api_key)
+ api_mode_desc=$(api_mode_label "$api_mode")
+ echo "当前模型:"
+ echo "  Provider : ${provider:-未设置}"
+ echo "  Model    : ${model:-未设置}"
+ echo "  Base URL : ${base_url:-默认官方地址}"
+ if [ -n "$api_mode" ]; then
+  echo "  API Mode : $api_mode ($api_mode_desc)"
+ else
+  echo "  API Mode : 默认/自动"
+ fi
+ if [ -n "$api_key" ]; then
+  echo "  API Key  : 已写入 config.yaml"
+ else
+  echo "  API Key  : 未在 config.yaml 明文配置（可能在 .env）"
+ fi
+}
+
+finish_model_change(){
+ echo "✅ 模型配置已保存。"
+ echo "ℹ️ 已运行中的 CLI 需要退出重开；Gateway 需要重启后生效。"
+ read -r -p "是否立即测试一次？(y/N): " test_now
+ if [[ "${test_now:-}" =~ ^[Yy]$ ]]; then
+  hermes chat -q "请只回复 OK" || true
+ fi
+ read -r -p "是否立即重启 Gateway？(y/N): " r
+ [[ "$r" =~ ^[Yy]$ ]] && restart_gateway
+ pause
+}
+
+api_mode_label(){
+ case "${1:-}" in
+  chat_completions) echo "OpenAI Chat Completions" ;;
+  codex_responses) echo "OpenAI Responses / Codex" ;;
+  anthropic_messages) echo "Anthropic Messages" ;;
+  bedrock_converse) echo "AWS Bedrock Converse" ;;
+  codex_app_server) echo "Codex App Server" ;;
+  "") echo "默认/自动" ;;
+  *) echo "$1" ;;
+ esac
+}
+
+choose_api_mode(){
+ local current="${1:-chat_completions}" choice
+ echo "协议类型 / API Mode:" >&2
+ echo "  1) OpenAI Chat Completions   /v1/chat/completions（大多数中转默认）" >&2
+ echo "  2) OpenAI Responses / Codex  /v1/responses" >&2
+ echo "  3) Anthropic Messages        /v1/messages 或 /anthropic" >&2
+ echo "  4) AWS Bedrock Converse" >&2
+ echo "  5) Codex App Server" >&2
+ echo "  0) 保持当前: $(api_mode_label "$current")" >&2
+ read -r -p "请选择协议类型 [0]: " choice
+ case "${choice:-0}" in
+  1) echo "chat_completions" ;;
+  2) echo "codex_responses" ;;
+  3) echo "anthropic_messages" ;;
+  4) echo "bedrock_converse" ;;
+  5) echo "codex_app_server" ;;
+  0|"") echo "$current" ;;
+  *) echo "❌ 无效选择" >&2; return 1 ;;
+ esac
+}
+
+openai_compatible_model_config(){
+ local provider current_model current_base current_mode current_key model base_url api_key api_mode
+ echo -e "\n--- OpenAI 兼容 / 中转模型配置 ---"
+ provider="custom"
+ current_model=$(model_value default)
+ current_base=$(model_value base_url)
+ current_mode=$(model_value api_mode)
+ current_key=$(model_value api_key)
+ echo "适合 subapi、one-api、new-api、LiteLLM、OpenRouter 兼容地址等。"
+ read -r -p "Base URL [${current_base:-https://example.com/v1}]: " base_url
+ base_url=${base_url:-$current_base}
+ read -r -p "模型 ID [${current_model:-deepseek-v4-flash}]: " model
+ model=${model:-${current_model:-deepseek-v4-flash}}
+ api_mode=$(choose_api_mode "${current_mode:-chat_completions}") || { pause; return; }
+ if [ -n "$current_key" ]; then
+  read -r -p "API Key 已存在，回车沿用；输入新 key 则覆盖: " api_key
+ else
+  read -r -p "API Key（可回车跳过）: " api_key
+ fi
+ [ -z "${base_url:-}" ] && { echo "❌ Base URL 不能为空"; pause; return; }
+ [ -z "${model:-}" ] && { echo "❌ 模型 ID 不能为空"; pause; return; }
+ config_batch_start
+ hermes_config_set model.provider "$provider"
+ hermes_config_set model.base_url "$base_url"
+ hermes_config_set model.default "$model"
+ hermes_config_set model.api_mode "$api_mode"
+ [ -n "${api_key:-}" ] && hermes_config_set model.api_key "$api_key"
+ config_batch_end
+ finish_model_change
+}
+
+switch_model_id(){
+ local current_model model
+ current_model=$(model_value default)
+ echo -e "\n--- 切换当前模型 ID ---"
+ echo "当前模型 ID: ${current_model:-未设置}"
+ read -r -p "新的模型 ID（回车返回）: " model
+ [ -z "${model:-}" ] && return
+ config_batch_start
+ hermes_config_set model.default "$model"
+ config_batch_end
+ finish_model_change
+}
+
 preset_provider(){
- local choice provider model base_url env_name key
- echo -e "\n--- 快捷配置模型 Provider ---"
+ local choice provider model base_url env_name key custom_model
+ echo -e "\n--- 官方 Provider 快捷配置 ---"
  printf "%-22s %-22s %-22s\n" "1) OpenRouter" "2) Anthropic" "3) OpenAI"
  printf "%-22s %-22s %-22s\n" "4) DeepSeek" "5) Google Gemini" "6) xAI/Grok"
  printf "%-22s %-22s %-22s\n" "7) Groq" "8) Mistral" "9) Kimi/Moonshot"
- printf "%-22s %-22s %-22s\n" "10) DashScope/Qwen" "11) MiniMax" "12) 自定义 OpenAI 兼容"
- echo "0) 返回"
+ printf "%-22s %-22s %-22s\n" "10) DashScope/Qwen" "11) MiniMax" "12) 返回"
  read -r -p "请选择编号: " choice
  case "${choice:-}" in
   1) provider="openrouter"; base_url=""; model="anthropic/claude-sonnet-4" ;;
@@ -443,72 +587,76 @@ preset_provider(){
   9) provider="kimi"; base_url=""; model="kimi-k2-latest" ;;
   10) provider="dashscope"; base_url=""; model="qwen-max" ;;
   11) provider="minimax"; base_url=""; model="minimax-text-01" ;;
-  12)
-   read -r -p "Provider 名称 [custom]: " provider; provider=${provider:-custom}
-   read -r -p "Base URL: " base_url
-   read -r -p "模型 ID: " model
-   ;;
-  0|"") return ;;
+  0|12|"") return ;;
   *) echo "❌ 无效选择"; return ;;
  esac
- [ -n "${model:-}" ] || { echo "❌ 模型 ID 不能为空"; return; }
+ read -r -p "模型 ID [$model]: " custom_model
+ model=${custom_model:-$model}
  env_name=$(provider_env_name "$provider")
- if [ -n "$env_name" ]; then
-  read -r -p "请输入 API Key（将写入 $ENV_FILE 的 $env_name，回车跳过）: " key
-  [ -n "${key:-}" ] && set_env_var "$env_name" "$key"
- else
-  read -r -p "请输入 API Key（自定义 provider 可回车跳过，必要时请手动配置）: " key
-  [ -n "${key:-}" ] && set_env_var "HERMES_CUSTOM_API_KEY" "$key"
- fi
+ read -r -p "API Key（写入 $ENV_FILE 的 $env_name，回车跳过）: " key
+ [ -n "${key:-}" ] && set_env_var "$env_name" "$key"
+ config_batch_start
  hermes_config_set model.provider "$provider"
  hermes_config_set model.default "$model"
- [ -n "${base_url:-}" ] && hermes_config_set model.base_url "$base_url"
- echo "✅ 模型已配置为 provider=$provider, model=$model"
- echo "ℹ️ 如果当前 CLI 已运行，需要退出重开；Gateway 需要重启后生效。"
- read -r -p "是否立即重启 Gateway？(y/N): " r
- [[ "$r" =~ ^[Yy]$ ]] && restart_gateway
- pause
+ hermes_config_set model.base_url "${base_url:-}"
+ hermes_config_set model.api_mode ""
+ hermes_config_set model.api_key ""
+ config_batch_end
+ finish_model_change
 }
 
 manual_model_config(){
- local provider model base_url api_key env_name
- echo -e "\n--- 手动配置模型 ---"
- read -r -p "Provider 名称: " provider
- read -r -p "模型 ID: " model
- read -r -p "Base URL（可选，回车跳过）: " base_url
+ local provider model base_url api_key env_name current_provider current_model current_base current_mode api_mode
+ echo -e "\n--- 高级手动配置 ---"
+ current_provider=$(model_value provider)
+ current_model=$(model_value default)
+ current_base=$(model_value base_url)
+ current_mode=$(model_value api_mode)
+ read -r -p "Provider 名称 [${current_provider:-custom}]: " provider
+ provider=${provider:-${current_provider:-custom}}
+ read -r -p "模型 ID [${current_model:-deepseek-v4-flash}]: " model
+ model=${model:-${current_model:-deepseek-v4-flash}}
+ read -r -p "Base URL [${current_base:-可留空使用官方默认}]: " base_url
+ base_url=${base_url:-$current_base}
+ api_mode=$(choose_api_mode "${current_mode:-chat_completions}") || { pause; return; }
  [ -z "${provider:-}" ] && { echo "❌ Provider 不能为空"; pause; return; }
  [ -z "${model:-}" ] && { echo "❌ 模型 ID 不能为空"; pause; return; }
  env_name=$(provider_env_name "$provider")
  if [ -z "$env_name" ]; then env_name="HERMES_$(uppercase "$provider")_API_KEY"; env_name=$(echo "$env_name" | tr -c 'A-Z0-9_' '_'); fi
  read -r -p "API Key（写入 $env_name，回车跳过）: " api_key
  [ -n "${api_key:-}" ] && set_env_var "$env_name" "$api_key"
+ config_batch_start
  hermes_config_set model.provider "$provider"
  hermes_config_set model.default "$model"
- [ -n "${base_url:-}" ] && hermes_config_set model.base_url "$base_url"
- echo "✅ 模型配置已保存。"
- pause
+ hermes_config_set model.base_url "${base_url:-}"
+ hermes_config_set model.api_mode "$api_mode"
+ config_batch_end
+ finish_model_change
 }
 
 model_manage(){
  check_hermes || return 1
  while true; do
-  echo -e "\n--- 模型 / Provider 管理 ---"
-  echo "当前配置:"
-  hermes config 2>/dev/null | grep -E 'provider:|default:|base_url:' | head -20 || true
-  echo "1) 快捷配置 Provider"
-  echo "2) 手动配置 Provider/模型"
-  echo "3) 打开 Hermes 官方模型选择器"
-  echo "4) 运行 hermes doctor 检查"
-  echo "5) 测试一次 hermes chat -q"
+  echo -e "\n--- 大模型配置 ---"
+  show_model_summary
+  echo "1) 配置/修改 OpenAI 兼容中转（推荐）"
+  echo "2) 只切换当前模型 ID"
+  echo "3) 官方 Provider 快捷配置"
+  echo "4) 高级手动配置"
+  echo "5) 打开 Hermes 官方模型选择器"
+  echo "6) 测试当前模型"
+  echo "7) 运行 hermes doctor 检查"
   echo "0) 返回"
   echo "------------------------------------------------"
   read -r -p "请选择操作: " c
   case "${c:-}" in
-   1) preset_provider ;;
-   2) manual_model_config ;;
-   3) hermes model; pause ;;
-   4) hermes doctor; pause ;;
-   5) hermes chat -q "请只回复 OK"; pause ;;
+   1) openai_compatible_model_config ;;
+   2) switch_model_id ;;
+   3) preset_provider ;;
+   4) manual_model_config ;;
+   5) hermes model; pause ;;
+   6) hermes chat -q "请只回复 OK"; pause ;;
+   7) hermes doctor; pause ;;
    0|"") return ;;
    *) echo "❌ 无效选择" ;;
   esac
@@ -524,12 +672,13 @@ configure_telegram(){
  [[ -z "${token:-}" ]] && { echo "❌ Bot Token 不能为空"; pause; return; }
  [[ -z "${uid:-}" ]] && { echo "❌ 用户/Chat ID 不能为空"; pause; return; }
  [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || { echo "❌ Bot Token 格式不正确，应类似 123456789:AA..."; pause; return; }
- backup_config
  set_env_var TELEGRAM_BOT_TOKEN "$token"
+ config_batch_start
  hermes_config_set telegram.allowed_chats "$uid"
  hermes_config_set telegram.allow_from "[\"$uid\"]"
  # 某些版本会读取 home channel，用这个命令失败也不影响 allowlist。
  hermes config set gateway.home_channel.telegram "$uid" >/dev/null 2>&1 || true
+ config_batch_end
  echo "⚙️ 正在重启 Gateway..."
  restart_gateway
  echo "✅ Telegram 配置已保存并重启。"
@@ -551,16 +700,18 @@ configure_proxy(){
  echo "当前 network proxy:"
  hermes config 2>/dev/null | grep -E 'http_proxy|https_proxy|force_ipv4' || true
  read -r -p "请输入代理 URL（例如 http://127.0.0.1:7890，留空表示删除）: " proxy
- backup_config
+ config_batch_start
  if [ -n "${proxy:-}" ]; then
   hermes_config_set network.http_proxy "$proxy"
   hermes_config_set network.https_proxy "$proxy"
+  config_batch_end
   set_env_var HTTP_PROXY "$proxy"
   set_env_var HTTPS_PROXY "$proxy"
   set_env_var ALL_PROXY "$proxy"
  else
   hermes_config_set network.http_proxy ""
   hermes_config_set network.https_proxy ""
+  config_batch_end
   unset_env_var HTTP_PROXY; unset_env_var HTTPS_PROXY; unset_env_var ALL_PROXY
  fi
  read -r -p "是否同时写入后台服务代理环境？Linux systemd 支持，macOS LaunchAgent 会在重装服务时继承 .env/PATH；继续写入 systemd？(y/N): " apply_service
@@ -796,6 +947,7 @@ hms.sh - Hermes Agent 管理脚本
   bash hms.sh              进入交互菜单
   bash hms.sh status       显示状态
   bash hms.sh install      安装 Hermes
+  bash hms.sh model        模型 / Provider 管理菜单
   bash hms.sh gateway      Gateway 管理菜单
   bash hms.sh telegram     Telegram 配置菜单
   bash hms.sh update       升级 Hermes
@@ -844,6 +996,7 @@ main(){
   help|-h|--help) show_help; exit 0 ;;
   status) print_status; exit 0 ;;
   install) install_hermes; exit 0 ;;
+  model|models) model_manage; exit 0 ;;
   gateway) gateway_manage; exit 0 ;;
   telegram) telegram_manage; exit 0 ;;
   update) update_hermes; exit 0 ;;
