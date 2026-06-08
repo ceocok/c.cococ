@@ -32,9 +32,43 @@ LOG_FILE="/var/log/easytier.log"
 GITHUB_API_URL="https://api.github.com/repos/EasyTier/EasyTier/releases/latest"
 
 # --- 辅助函数 ---
+cleanup_elevated_script() {
+	if [ -n "${EASYTIER_ELEVATED_SCRIPT:-}" ] && [ -f "${EASYTIER_ELEVATED_SCRIPT}" ]; then
+		rm -f "${EASYTIER_ELEVATED_SCRIPT}"
+	fi
+}
+
+ensure_root() {
+	if [ "$(id -u)" -eq 0 ]; then
+		trap cleanup_elevated_script EXIT
+		return
+	fi
+
+	local script_path="$0"
+	local temp_script=""
+
+	if [ -r "$script_path" ]; then
+		temp_script=$(mktemp "${TMPDIR:-/tmp}/easytier.XXXXXX.sh") || exit 1
+		cat "$script_path" > "$temp_script" || {
+			echo -e "${RED}错误: 无法创建临时提权脚本。${NC}"
+			rm -f "$temp_script"
+			exit 1
+		}
+		chmod 700 "$temp_script"
+		echo -e "${YELLOW}检测到当前不是 root，正在通过 sudo 重新运行脚本...${NC}"
+		exec sudo env EASYTIER_ELEVATED_SCRIPT="$temp_script" bash "$temp_script" "$@"
+	fi
+
+	echo -e "${RED}错误: 此脚本必须以 root 或 sudo 权限运行。${NC}"
+	echo -e "${YELLOW}macOS 上请使用: curl -sL <脚本地址> | sudo bash${NC}"
+	exit 1
+}
+
 check_root() {
 	if [ "$(id -u)" -ne 0 ]; then
-		echo -e "${RED}错误: 此脚本必须以 root 或 sudo 权限运行。${NC}"; exit 1
+		echo -e "${RED}错误: 此脚本必须以 root 或 sudo 权限运行。${NC}"
+		echo -e "${YELLOW}macOS 上请避免使用 sudo bash <(...)，请改用: curl -sL <脚本地址> | sudo bash${NC}"
+		exit 1
 	fi
 }
 
@@ -506,7 +540,7 @@ main() {
 		Darwin) OS_TYPE="macos"; SERVICE_FILE="/Library/LaunchDaemons/${SERVICE_LABEL}.plist"; ;;
 		*) echo -e "${RED}错误: 不支持的操作系统: $(uname)${NC}"; exit 1 ;;
 	esac
-	check_root; check_dependencies
+	ensure_root "$@"; check_dependencies
 	while true; do
 		clear
 		echo "======================================================="
