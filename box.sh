@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 使用cf代理
-BASE_URL="https://ghfast.top/https://raw.githubusercontent.com/ceocok/c.cococ/main"
+BASE_URL="https://ghproxy.cnno.de/https://raw.githubusercontent.com/ceocok/c.cococ/main"
 USER_SHORTCUT="$HOME/bin/box"
 SYSTEM_SHORTCUT="/usr/local/bin/box"
 
