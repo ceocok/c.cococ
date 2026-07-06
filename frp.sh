@@ -3,7 +3,7 @@ PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
 export PATH
 
 Green="\033[32m"Red="\033[31m"Yellow="\033[33m"Blue="\033[36m"Font="\033[0m"BOLD="\033[1m"
-FRP_VERSION="0.63.0"
+FRP_VERSION="0.69.1"
 PLUGIN_VERSION="0.0.2"
 
 # 1. 自动检测操作系统和硬件架构
