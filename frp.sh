@@ -2,7 +2,14 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
 export PATH
 
-Green="\033[32m"Red="\033[31m"Yellow="\033[33m"Blue="\033[36m"Font="\033[0m"BOLD="\033[1m"
+# 修复颜色变量定义（换行分开，防止打印成字符串乱码）
+Green="\033[32m"
+Red="\033[31m"
+Yellow="\033[33m"
+Blue="\033[36m"
+Font="\033[0m"
+BOLD="\033[1m"
+
 FRP_VERSION="0.69.1"
 PLUGIN_VERSION="0.0.2"
 
@@ -228,6 +235,14 @@ EOF
 frp_install_core() {
     local type="$1"
     echo -e "${Yellow}正在下载并安装 ${type}...${Font}"
+    
+    # 核心修复 2：在覆盖前先安全停止已运行的服务，并强行清除残留进程释放文件锁
+    svc_stop "$type" >/dev/null 2>&1 || true
+    if command -v killall >/dev/null 2>&1; then
+        killall -9 "$type" >/dev/null 2>&1 || true
+    fi
+    rm -f "$BIN_DIR/$type" >/dev/null 2>&1 || true
+
     download_frp_package || return 1
     
     local extracted_dir=$(find /tmp -maxdepth 1 -type d -name "frp_${FRP_VERSION}_*")
@@ -236,7 +251,8 @@ frp_install_core() {
         return 1
     fi
     
-    cp "$extracted_dir/$type" "$BIN_DIR/$type" || return 1
+    # 使用 cp -f 强行覆盖
+    cp -f "$extracted_dir/$type" "$BIN_DIR/$type" || return 1
     chmod +x "$BIN_DIR/$type"
     
     if [ ! -f "$CONFIG_DIR/$type.toml" ]; then
