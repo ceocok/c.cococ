@@ -124,6 +124,19 @@ normalize_downloaded_script() {
   fi
 }
 
+patch_macos_mktemp_template() {
+  local file="$1"
+
+  # BSD mktemp requires its X placeholders to be the final template characters.
+  # The downloaded Hermes helper currently appends .log to the template.
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  [ "$(basename "$file")" = "hms.sh" ] || return 0
+
+  sed -i '' \
+    's@log=$(mktemp "${TMPDIR:-/tmp}/hms-install\.XXXXXX\.log")@log=$(mktemp "${TMPDIR:-/tmp}/hms-install.XXXXXX")@' \
+    "$file"
+}
+
 needs_root() {
   local file="$1"
 
@@ -164,6 +177,8 @@ run_script() {
     rm -rf "$tmp_dir"
     return 1
   fi
+
+  patch_macos_mktemp_template "$script_path"
 
   # 4. 执行
   chmod +x "$script_path"
