@@ -156,6 +156,43 @@ check_hermes(){
 
 hermes_version(){ hermes --version 2>/dev/null | head -n1 || echo "unknown"; }
 
+run_hermes_installer(){
+ local -a args=(--skip-setup)
+ local log pid status elapsed=0 filled=0 empty=30 bar
+ local install_browser install_cua
+ read -r -p "安装 Playwright/Chromium 浏览器？(y/N): " install_browser
+ read -r -p "安装 CUA 桌面驱动？(y/N): " install_cua
+ [[ "${install_browser:-}" =~ ^[Yy]$ ]] || args+=(--skip-browser)
+ [[ "${install_cua:-}" =~ ^[Yy]$ ]] || args+=(--skip-computer-use)
+ log=$(mktemp "${TMPDIR:-/tmp}/hms-install.XXXXXX.log") || { echo "❌ 无法创建安装日志。"; return 1; }
+ echo "⚙️ 正在下载安装 Hermes，安装过程已静默处理..."
+ (
+  set -o pipefail
+  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh |
+   bash -s -- "${args[@]}"
+ ) >"$log" 2>&1 &
+ pid=$!
+ while kill -0 "$pid" 2>/dev/null; do
+  filled=$(( elapsed % 31 ))
+  empty=$(( 30 - filled ))
+  printf -v bar '%*s' "$filled" ''
+  bar=${bar// /#}
+  printf '\r[%-30s%*s] 正在安装 Hermes... %02d:%02d' "$bar" "$empty" '' "$((elapsed / 60))" "$((elapsed % 60))"
+  sleep 1
+  elapsed=$((elapsed + 1))
+ done
+ if wait "$pid"; then status=0; else status=$?; fi
+ printf '\r%*s\r' 80 ''
+ if [ "$status" -ne 0 ]; then
+  echo "❌ Hermes 安装失败，以下是安装日志末尾："
+  tail -n 80 "$log" 2>/dev/null || true
+  rm -f "$log"
+  return "$status"
+ fi
+ rm -f "$log"
+ echo "✅ Hermes 安装完成。"
+}
+
 print_status(){
  echo -e "\n--- Hermes 状态 ---"
  if hermes_exists; then
@@ -178,24 +215,41 @@ install_hermes(){
  echo -e "\n🚀 开始安装 Hermes Agent..."
  check_dep
  ensure_dirs
- if hermes_exists; then
-  echo "✅ 检测到 Hermes 已安装: $(cmd_path hermes)"
-  echo "版本: $(hermes_version)"
- else
-  echo "⚙️ 正在执行官方安装脚本..."
-  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+ if ! hermes_exists; then
+  # hms owns the onboarding flow, so the official setup wizard is suppressed.
+  run_hermes_installer || { pause; return 1; }
   hash -r
   hermes_exists || { echo "❌ 安装后仍未检测到 hermes 命令，请检查 PATH。"; pause; return 1; }
   echo "✅ Hermes 安装完成: $(cmd_path hermes)"
+  install_hms_command || true
  fi
+ echo "✅ 检测到 Hermes 已安装: $(cmd_path hermes)"
+ echo "版本: $(hermes_version)"
+ if is_macos; then remove_legacy_macos_gateway_service; fi
  install_hms_command || true
- echo "⚙️ 正在检查配置..."
- hermes config check 2>/dev/null || true
- read -r -p "是否运行 Hermes 交互式 setup 向导？(y/N): " ans
- if [[ "$ans" =~ ^[Yy]$ ]]; then hermes setup || true; fi
- read -r -p "是否安装 Gateway 后台服务？(y/N): " gw
- if [[ "$gw" =~ ^[Yy]$ ]]; then install_gateway_service; fi
- echo -e "${GREEN}✅ 安装流程完成。以后可直接输入 ${YELLOW}hms${GREEN} 启动本脚本。${RESET}"
+ if gateway_service_installed; then
+  echo "✅ Gateway 后台服务已安装。"
+  # The official installer may have installed the service already.  Do not
+  # silently skip Telegram onboarding in that first-install scenario.
+  if telegram_configured; then
+   echo "ℹ️ 已检测到 Telegram Token；可从菜单 [4] 修改消息平台配置。"
+  else
+   local configure_now
+   read -r -p "尚未配置 Telegram。现在填写 Bot Token 和用户 ID？(Y/n): " configure_now
+   if [[ ! "${configure_now:-}" =~ ^[Nn]$ ]]; then
+    configure_telegram
+   else
+    echo "ℹ️ 已跳过 Telegram；之后可从菜单 [4] → [1] 配置。"
+   fi
+  fi
+ else
+  echo "⚙️ 检测到 Hermes 已安装，但 Gateway 后台服务尚未安装。"
+  if install_gateway_service; then
+   echo "\n📱 Gateway 已安装，接下来配置 Telegram。"
+   configure_telegram
+  fi
+ fi
+ echo -e "${GREEN}✅ 当前安装流程已完成。以后可直接输入 ${YELLOW}hms${GREEN} 启动本脚本。${RESET}"
  pause
 }
 
@@ -227,75 +281,86 @@ safe_pkill_gateway(){
 
 gateway_status_ok(){ check_hermes >/dev/null 2>&1 && hermes gateway status 2>/dev/null | grep -Eiq 'running|active|connected'; }
 
-gateway_plist_path(){ printf '%s\n' "$HOME/Library/LaunchAgents/com.hermes.gateway.plist"; }
+gateway_plist_path(){ printf '%s\n' "$HOME/Library/LaunchAgents/ai.hermes.gateway.plist"; }
 
-install_macos_gateway_service(){
- local plist hermes_path log_out log_err
- has_launchctl || { echo "❌ macOS 缺少 launchctl，无法安装 LaunchAgent。"; return 1; }
- hermes_path=$(cmd_path hermes)
- [ -n "$hermes_path" ] || { echo "❌ 未找到 hermes 命令。"; return 1; }
- plist=$(gateway_plist_path)
- mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
- log_out="$LOG_DIR/gateway.log"
- log_err="$LOG_DIR/gateway.err.log"
- cat > "$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.hermes.gateway</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$hermes_path</string>
-    <string>gateway</string>
-    <string>run</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$log_out</string>
-  <key>StandardErrorPath</key>
-  <string>$log_err</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HERMES_HOME</key>
-    <string>$HERMES_HOME</string>
-    <key>PATH</key>
-    <string>$PATH</string>
-  </dict>
-</dict>
-</plist>
-EOF
- launchctl unload "$plist" >/dev/null 2>&1 || true
- launchctl load "$plist"
- echo "✅ macOS LaunchAgent 已安装: $plist"
+gateway_service_installed(){
+ if is_macos; then
+  [ -f "$(gateway_plist_path)" ]
+ elif has_systemd; then
+  [ -f "$HOME/.config/systemd/user/hermes-gateway.service" ] || [ -f "/etc/systemd/system/hermes-gateway.service" ]
+ else
+  hermes gateway status 2>/dev/null | grep -Eiq 'installed|supervised'
+ fi
+}
+
+linux_gateway_service_scopes(){
+ local scopes=()
+ [ -f "$HOME/.config/systemd/user/hermes-gateway.service" ] && scopes+=("用户级")
+ [ -f "/etc/systemd/system/hermes-gateway.service" ] && scopes+=("系统级")
+ printf '%s\n' "${scopes[*]:-}"
+}
+
+linux_gateway_service_conflict(){
+ local scopes
+ scopes=$(linux_gateway_service_scopes)
+ [[ "$scopes" == *"用户级"* && "$scopes" == *"系统级"* ]]
+}
+
+repair_linux_gateway_services(){
+ is_linux && has_systemd || return 0
+ # Hermes only removes units whose file is verified as an old Hermes gateway.
+ # This is safe for user-level units; system units require sudo.
+ if [ -f "$HOME/.config/systemd/user/hermes.service" ]; then
+  echo "⚙️ 检测到旧的用户级 hermes.service，正在调用官方迁移清理..."
+  hermes gateway migrate-legacy --yes || true
+ fi
+ if [ -f "/etc/systemd/system/hermes.service" ]; then
+  echo "⚠️ 检测到旧的系统级 hermes.service。请允许 sudo 后运行：sudo hermes gateway migrate-legacy"
+ fi
+ if linux_gateway_service_conflict; then
+  echo "⚠️ 同时检测到用户级和系统级 hermes-gateway.service。"
+  echo "   两者可能会同时轮询同一个 Telegram Bot。脚本不会自动删除任一服务。"
+  echo "   当前范围: $(linux_gateway_service_scopes)；请保留一个服务后再继续。"
+  return 1
+ fi
+ return 0
+}
+
+remove_legacy_macos_gateway_service(){
+ local legacy="$HOME/Library/LaunchAgents/com.hermes.gateway.plist"
+ [ -f "$legacy" ] || return 0
+ # Earlier hms versions created this non-official label. Leaving it loaded
+ # makes two gateways compete for the same Telegram polling connection.
+ launchctl unload "$legacy" >/dev/null 2>&1 || true
+ rm -f "$legacy"
+ echo "ℹ️ 已移除旧的 com.hermes.gateway LaunchAgent，改用 Hermes 官方服务。"
 }
 
 install_gateway_service(){
  check_hermes || return 1
  echo "⚙️ 正在安装 Hermes Gateway 服务..."
- if is_macos; then
-  install_macos_gateway_service || echo "⚠️ LaunchAgent 安装失败，稍后仍会尝试启动。"
- elif hermes gateway install; then
-  echo "✅ Gateway 服务已安装"
+ if is_macos; then remove_legacy_macos_gateway_service; fi
+ repair_linux_gateway_services || return 1
+ # 明确传入官方非交互参数，避免安装器再次询问：
+ # “Start the gateway now…” 和 “Start automatically on login/boot…”。
+ # 两项均采用用户要求的默认行为：立即启动并设为开机/登录自启。
+ if hermes gateway install --start-now --start-on-login; then
+  echo "✅ Gateway 服务已安装并已设为自动启动"
  else
-  echo "⚠️ Gateway 服务安装命令返回失败，仍会尝试启动。"
+  echo "❌ Gateway 服务安装失败。请查看下方状态和日志后重试。"
+  hermes gateway status 2>/dev/null || true
+  return 1
  fi
  start_gateway
 }
 
 start_gateway(){
  check_hermes || return 1
+ repair_linux_gateway_services || return 1
  echo "⚙️ 正在启动 Gateway..."
  if hermes gateway start >/dev/null 2>&1; then
   sleep 2
-  echo "✅ Gateway 启动命令已执行"
- elif is_macos && has_launchctl && [ -f "$(gateway_plist_path)" ] && launchctl load "$(gateway_plist_path)" >/dev/null 2>&1; then
-  sleep 2
-  echo "✅ macOS LaunchAgent 已启动"
+  echo "✅ Gateway 启动命令已执行（同时会修复过期的官方服务定义）"
  elif has_systemd && systemctl start hermes-gateway.service >/dev/null 2>&1; then
   sleep 2
   echo "✅ systemd Gateway 已启动"
@@ -316,16 +381,34 @@ stop_gateway(){
  check_hermes || return 1
  echo "⚙️ 正在停止 Gateway..."
  hermes gateway stop >/dev/null 2>&1 || true
- if is_macos && has_launchctl && [ -f "$(gateway_plist_path)" ]; then
-  launchctl unload "$(gateway_plist_path)" >/dev/null 2>&1 || true
- fi
- if has_systemd; then systemctl stop hermes-gateway.service >/dev/null 2>&1 || true; fi
- if has_user_systemd; then systemctl --user stop hermes-gateway >/dev/null 2>&1 || true; fi
  safe_pkill_gateway
  echo "✅ Gateway 已停止"
 }
 
-restart_gateway(){ stop_gateway; sleep 1; start_gateway; }
+restart_gateway(){
+ check_hermes || return 1
+ repair_linux_gateway_services || return 1
+ # Use Hermes's official restart rather than stop + start + pkill.  In
+ # particular, `gateway restart` regenerates an outdated systemd/launchd unit;
+ # the former sequence left first-run services on their old definition and made
+ # a newly saved .env appear to be ignored.
+ if gateway_service_installed; then
+  echo "⚙️ 正在通过 Hermes 官方服务重启 Gateway..."
+  if hermes gateway restart; then
+   sleep 2
+   hermes gateway status 2>/dev/null || true
+   if gateway_status_ok; then
+    return 0
+   fi
+   echo "⚠️ Gateway 重启命令已返回，但服务未进入运行状态。"
+  else
+   echo "⚠️ 官方服务重启失败，尝试兼容启动路径..."
+  fi
+ fi
+ # There is no installed supervisor (WSL/Docker/Termux etc.); use the existing
+ # foreground fallback without killing unrelated profile gateways.
+ start_gateway
+}
 
 gateway_logs(){
  echo -e "\n--- Gateway 日志 ---"
@@ -665,32 +748,190 @@ model_manage(){
 
 configure_telegram(){
  check_hermes || return 1
- local token uid send_test
+ local token uid
  echo -e "\n--- 配置 Telegram Bot ---"
- read -r -p "Telegram Bot Token: " token
- read -r -p "Telegram 用户/Chat ID: " uid
- [[ -z "${token:-}" ]] && { echo "❌ Bot Token 不能为空"; pause; return; }
- [[ -z "${uid:-}" ]] && { echo "❌ 用户/Chat ID 不能为空"; pause; return; }
- [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || { echo "❌ Bot Token 格式不正确，应类似 123456789:AA..."; pause; return; }
+ # Do not block credential collection when python-telegram-bot is absent.
+ # Hermes lazily installs this optional dependency when the Telegram adapter
+ # starts. The old preflight returned here before either prompt was shown.
+ if ! telegram_dependency_ok; then
+  echo "ℹ️ 未安装 python-telegram-bot；保存配置并重启 Gateway 后，Hermes 会按需安装 Telegram 依赖。"
+ fi
+ # Show the token while it is entered so the operator can verify it. It is
+ # still written only to ~/.hermes/.env (mode 600); avoid pasting it into shell
+ # commands or sharing the terminal scrollback afterwards.
+ read -r -p "Telegram Bot Token（输入可见）: " token
+ read -r -p "Telegram 数字用户 ID: " uid
+ # Keep validation aligned with Hermes itself.  The old 20-character minimum
+ # accepted values that Hermes later rejected as invalid tokens.
+ [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]] || { echo "❌ Bot Token 格式不正确。"; pause; return 1; }
+ [[ "$uid" =~ ^-?[0-9]+$ ]] || { echo "❌ 用户 ID 必须是数字。"; pause; return 1; }
+
+ # Validate the credential before changing any persistent configuration.  This
+ # distinguishes a bad token/network failure from a service-reload problem and
+ # avoids overwriting a working setup with an unusable value.
+ echo "⚙️ 正在验证 Telegram Bot Token..."
+ if ! telegram_token_valid "$token"; then
+  echo "❌ 无法通过 Telegram Bot API 验证该 Token。请检查网络/代理或 Token；现有配置未修改。"
+  pause
+  return 1
+ fi
+
+ gateway_log_size_before
  set_env_var TELEGRAM_BOT_TOKEN "$token"
- config_batch_start
- hermes_config_set telegram.allowed_chats "$uid"
- hermes_config_set telegram.allow_from "[\"$uid\"]"
- # 某些版本会读取 home channel，用这个命令失败也不影响 allowlist。
- hermes config set gateway.home_channel.telegram "$uid" >/dev/null 2>&1 || true
- config_batch_end
- echo "⚙️ 正在重启 Gateway..."
- restart_gateway
- echo "✅ Telegram 配置已保存并重启。"
- read -r -p "是否发送测试消息？(Y/n): " send_test
- if [[ ! "$send_test" =~ ^[Nn]$ ]]; then
-  if hermes chat -q "请通过 messaging/send_message 工具给 telegram:$uid 发送一条内容为：Hermes Telegram 配置测试成功 ✅ 的消息。只需要执行发送，不要解释。" --toolsets messaging -Q 2>/dev/null; then
-   echo "✅ 已尝试发送测试消息。"
+ set_env_var TELEGRAM_ALLOWED_USERS "$uid"
+ set_env_var TELEGRAM_HOME_CHANNEL "$uid"
+ # Hermes v0.20.x may crash in its fallback-IP transport with
+ # "Any cannot be instantiated" after the credentials have already been
+ # accepted.  Direct HTTPS is verified above, so disable only that broken
+ # optional transport before the FIRST gateway start; Hermes still retries the
+ # normal api.telegram.org route itself.
+ set_env_var HERMES_TELEGRAM_DISABLE_FALLBACK_IPS true
+ # Remove keys written by older hms versions. Current Hermes reads the env
+ # variables above, not telegram.allow_from or gateway.home_channel.telegram.
+ hermes config unset telegram.allow_from >/dev/null 2>&1 || true
+ hermes config unset gateway.home_channel.telegram >/dev/null 2>&1 || true
+ echo "⚙️ Telegram 配置已保存，正在重启 Gateway..."
+ if ! restart_gateway; then
+  echo "❌ Gateway 重启失败，请从菜单 [5] 查看日志。"
+  pause
+  return 1
+ fi
+ if wait_for_telegram_connection 45; then
+  echo "✅ Telegram 已连接。请先向机器人发送 /start，然后即可开始对话。"
+ elif gateway_logs_contain_fallback_transport_error; then
+  # Covers installations configured by older hms releases which did not set
+  # the workaround before their first restart.
+  echo "⚙️ 检测到 Hermes Telegram fallback-IP 兼容错误，正在关闭该可选传输并重启…"
+  set_env_var HERMES_TELEGRAM_DISABLE_FALLBACK_IPS true
+  if restart_gateway && wait_for_telegram_connection 45; then
+   echo "✅ Telegram 已连接（已绕过 Hermes fallback-IP 兼容错误）。"
   else
-   echo "⚠️ 测试消息发送失败。请确认用户已先向机器人发过 /start，然后在 Hermes 中使用 send_message 工具测试。"
+   echo "❌ 已应用 Telegram fallback-IP 兼容修复，但仍未连接。请从菜单 [5] 查看日志。"
+   return 1
   fi
+ elif gateway_logs_contain_telegram_import_error; then
+  echo "⚙️ Telegram 插件依赖加载失败，正在用 Hermes 自己的 Python 环境补装 python-telegram-bot…"
+  if repair_telegram_dependency && restart_gateway && wait_for_telegram_connection 45; then
+   echo "✅ Telegram 依赖已修复并成功连接。请先向机器人发送 /start。"
+  else
+   echo "❌ 自动修复后仍未连接。请从菜单 [5] 查看 Gateway 日志。"
+   return 1
+  fi
+ else
+  echo "❌ Gateway 已启动但 Telegram 在 45 秒内未连接。"
+  echo "   Token 已验证；请从菜单 [5] 查看日志并检查服务器到 api.telegram.org 的网络/代理。"
+  return 1
  fi
  pause
+}
+
+telegram_token_valid(){
+ local token="$1" response body ok
+ # Bot API validation is intentionally performed before persisting the token.
+ # curl errors and HTTP errors are failures; `ok:true` is the only success.
+ response=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+  "https://api.telegram.org/bot${token}/getMe") || return 1
+ body=${response//$'\n'/}
+ case "$body" in
+  *'"ok":true'*|*'"ok": true'*) return 0 ;;
+  *) return 1 ;;
+ esac
+}
+
+telegram_dependency_ok(){
+ local bin py
+ bin=$(hermes_bin)
+ [ -n "$bin" ] || return 1
+ py=$(hermes_python)
+ [ -n "$py" ] || return 1
+ "$py" - <<'PY' >/dev/null 2>&1
+from telegram.ext import Application
+from telegram.request import HTTPXRequest
+assert Application is not None and HTTPXRequest is not None
+PY
+}
+
+repair_telegram_dependency(){
+ local py
+ py=$(hermes_python) || { echo "❌ 找不到 Hermes 的 Python 运行环境。"; return 1; }
+ # 先检查，不满足时才安装，避免每次配置均产生无意义网络操作。
+ if telegram_dependency_ok; then
+  return 0
+ fi
+ "$py" -m pip install --upgrade 'python-telegram-bot>=21,<23'
+ telegram_dependency_ok
+}
+
+hermes_python(){
+ local bin target candidate
+ bin=$(hermes_bin)
+ [ -n "$bin" ] || return 1
+ target="$bin"
+ # The generated entrypoint normally execs <venv>/bin/hermes. Resolve that
+ # stable sibling first; it works for both ~/.hermes and Linux FHS installs.
+ if need_cmd readlink; then
+  candidate=$(readlink "$bin" 2>/dev/null || true)
+  if [ -n "$candidate" ]; then
+   case "$candidate" in
+    /*) target="$candidate" ;;
+    *) target="$(dirname "$bin")/$candidate" ;;
+   esac
+  fi
+ fi
+ for candidate in \
+  "$(dirname "$target")/python" \
+  "$HERMES_HOME/hermes-agent/venv/bin/python" \
+  "/usr/local/lib/hermes-agent/venv/bin/python"; do
+  if [ -x "$candidate" ]; then
+   printf '%s\n' "$candidate"
+   return 0
+  fi
+ done
+ # Do not use the host python: it cannot prove the Hermes service venv has
+ # python-telegram-bot installed.
+ return 1
+}
+
+telegram_configured(){
+ [ -f "$ENV_FILE" ] && grep -q '^TELEGRAM_BOT_TOKEN=.' "$ENV_FILE"
+}
+
+gateway_log_size_before(){
+ # Test first: a missing optional error log otherwise fails during shell
+ # redirection before stderr can be suppressed.
+ GATEWAY_LOG_START_LINES=$([ -f "$LOG_FILE" ] && wc -l < "$LOG_FILE" || echo 0)
+ GATEWAY_ERROR_LOG_START_LINES=$([ -f "$HERMES_HOME/logs/gateway.error.log" ] && wc -l < "$HERMES_HOME/logs/gateway.error.log" || echo 0)
+}
+
+gateway_logs_since_telegram_setup(){
+ local start="${GATEWAY_LOG_START_LINES:-0}" error_start="${GATEWAY_ERROR_LOG_START_LINES:-0}"
+ # An absent optional error log must not make this producer fail: with
+ # pipefail, that previously made a successful `grep` look like a timeout.
+ [ -f "$LOG_FILE" ] && tail -n "+$((start + 1))" "$LOG_FILE" 2>/dev/null || true
+ [ -f "$HERMES_HOME/logs/gateway.error.log" ] && tail -n "+$((error_start + 1))" "$HERMES_HOME/logs/gateway.error.log" 2>/dev/null || true
+ return 0
+}
+
+wait_for_telegram_connection(){
+ local timeout="${1:-30}" elapsed=0
+ while [ "$elapsed" -lt "$timeout" ]; do
+  if gateway_logs_since_telegram_setup | grep -Eiq 'telegram connected|Connected to Telegram'; then
+   return 0
+  fi
+  sleep 2
+  elapsed=$((elapsed + 2))
+ done
+ return 1
+}
+
+gateway_logs_contain_fallback_transport_error(){
+ gateway_logs_since_telegram_setup | grep -Fq 'Any cannot be instantiated'
+}
+
+gateway_logs_contain_telegram_import_error(){
+ # Keep dependency detection distinct from the known fallback-IP transport
+ # failure: the latter is fixed by disabling that transport, not by pip.
+ gateway_logs_since_telegram_setup | grep -Eiq 'ModuleNotFoundError:.*telegram|No module named.*telegram|cannot import name.*telegram|ImportError:.*telegram'
 }
 
 configure_proxy(){
@@ -918,9 +1159,11 @@ reset_or_uninstall(){
    read -r -p "确认仅卸载 Hermes 程序，并保留 $HERMES_HOME 数据？(y/N): " confirm
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
     stop_gateway || true
-    if hermes_exists; then hermes uninstall || true; fi
+    # 已由 hms 完成确认；传 --yes 防止 Hermes 官方卸载器再次显示交互向导。
+    # 不加 --full 时官方卸载器只移除程序，保留配置、会话和日志。
+    if hermes_exists; then hermes uninstall --yes || true; fi
     safe_remove_hms_commands
-    echo "✅ 已执行卸载命令，数据已保留。"
+    echo "✅ 已卸载 Hermes 程序，数据已保留。"
    else echo "已取消。"; fi
    pause
    ;;
@@ -928,8 +1171,13 @@ reset_or_uninstall(){
    read -r -p "确认彻底卸载 Hermes 并删除 $HERMES_HOME 全部数据？(y/N): " confirm
    if [[ "$confirm" =~ ^[Yy]$ ]]; then
     stop_gateway || true
-    if hermes_exists; then hermes uninstall || true; fi
-    rm -rf "$HERMES_HOME"
+    # hms 已完成危险操作确认；--full --yes 让官方卸载器无交互执行，
+    # 并由它一致地移除程序及 $HERMES_HOME 数据。
+    if hermes_exists; then
+     hermes uninstall --full --yes || { echo "❌ Hermes 官方彻底卸载失败，已取消删除数据。"; pause; return; }
+    else
+     rm -rf "$HERMES_HOME"
+    fi
     safe_remove_hms_commands
     echo "✅ Hermes 已彻底卸载。"
    else echo "已取消。"; fi
