@@ -4,7 +4,9 @@ set -euo pipefail
 # hms.sh - Hermes Agent 全能安装/管理助手
 # 参考 ocm.sh 的交互式菜单风格，为 Hermes Agent 提供安装、配置、Gateway、Telegram、模型、工具、技能、Cron、更新/卸载等常用管理功能。
 
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+HMS_BIN_DIR="${XDG_BIN_HOME:-}"
+HMS_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/hermes"
+export PATH="${XDG_BIN_HOME:-$HOME/.local/bin}:$HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 CONFIG="$HERMES_HOME/config.yaml"
@@ -29,6 +31,7 @@ is_linux(){ [[ "$(os_name)" == "Linux" ]]; }
 has_systemd(){ is_linux && need_cmd systemctl && systemctl list-unit-files >/dev/null 2>&1; }
 has_user_systemd(){ is_linux && need_cmd systemctl && systemctl --user list-unit-files >/dev/null 2>&1; }
 has_launchctl(){ is_macos && need_cmd launchctl; }
+path_contains(){ case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac; }
 
 
 ensure_dirs(){ mkdir -p "$HERMES_HOME" "$BACKUP_DIR" "$LOG_DIR"; }
@@ -58,23 +61,44 @@ resolve_script_path(){
 }
 
 choose_bin_dir(){
- if is_macos && [ -d "/opt/homebrew/bin" ]; then
-  echo "/opt/homebrew/bin"
- elif [ -d "/usr/local/bin" ]; then
+ if [ -n "$HMS_BIN_DIR" ]; then
+  echo "$HMS_BIN_DIR"
+ elif path_contains "$HOME/.local/bin"; then
+  echo "$HOME/.local/bin"
+ elif path_contains "$HOME/bin"; then
+  echo "$HOME/bin"
+ elif [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
   echo "/usr/local/bin"
  else
   echo "$HOME/.local/bin"
  fi
 }
 
+persist_hms_script(){
+ local source target dir
+ source=$(resolve_script_path)
+ target="$HMS_DATA_DIR/hms.sh"
+ [ "$source" = "$target" ] && { printf '%s\n' "$target"; return 0; }
+ dir=$(dirname "$target")
+ mkdir -p "$dir" || {
+  echo "❌ 无法创建 hms 持久目录：$dir" >&2
+  return 1
+ }
+ if [ ! -f "$target" ] || ! cmp -s "$source" "$target"; then
+  cp "$source" "$target" || {
+   echo "❌ 无法保存 hms 脚本：$target" >&2
+   return 1
+  }
+  chmod +x "$target"
+ fi
+ printf '%s\n' "$target"
+}
+
 install_hms_command(){
  local target script_path dir
- script_path=$(resolve_script_path)
+ script_path=$(persist_hms_script) || return 1
  target="$(choose_bin_dir)/$SCRIPT_NAME"
- [ -f "$script_path" ] || return 0
- if [ "$script_path" = "$target" ]; then
-  return 0
- fi
+ [ -f "$script_path" ] || return 1
  dir=$(dirname "$target")
  if mkdir -p "$dir" 2>/dev/null && cat > "$target" 2>/dev/null <<EOF
 #!/usr/bin/env bash
@@ -82,16 +106,15 @@ exec bash "$script_path" "\$@"
 EOF
  then
   chmod +x "$target" 2>/dev/null || true
+  if ! path_contains "$dir"; then
+   echo "⚠️ $dir 不在 PATH 中。当前 shell 请执行："
+   echo "export PATH=\"$dir:\$PATH\""
+  fi
   return 0
  fi
- if need_cmd sudo; then
-  sudo mkdir -p "$dir" >/dev/null 2>&1 || true
-  sudo tee "$target" >/dev/null 2>&1 <<EOF
-#!/usr/bin/env bash
-exec bash "$script_path" "\$@"
-EOF
-  sudo chmod +x "$target" 2>/dev/null || true
- fi
+ echo "❌ 无法创建 hms 快捷命令：$target" >&2
+ echo "请确认 $dir 可写，或设置 XDG_BIN_HOME 为可写目录。" >&2
+ return 1
 }
 
 check_dep(){
@@ -164,7 +187,7 @@ run_hermes_installer(){
  read -r -p "安装 CUA 桌面驱动？(y/N): " install_cua
  [[ "${install_browser:-}" =~ ^[Yy]$ ]] || args+=(--skip-browser)
  [[ "${install_cua:-}" =~ ^[Yy]$ ]] || args+=(--skip-computer-use)
- log=$(mktemp "${TMPDIR:-/tmp}/hms-install.XXXXXX.log") || { echo "❌ 无法创建安装日志。"; return 1; }
+ log=$(mktemp "${TMPDIR:-/tmp}/hms-install.XXXXXX") || { echo "❌ 无法创建安装日志。"; return 1; }
  echo "⚙️ 正在下载安装 Hermes，安装过程已静默处理..."
  (
   set -o pipefail
