@@ -178,6 +178,27 @@ run_script() {
     return 1
   fi
 
+  # hms.sh 会把自身路径写入 hms 快捷命令。它不能继续放在这里的
+  # 临时目录中，否则本函数结束后的清理会让 hms 变成失效链接。
+  if [ "$save_name" = "hms.sh" ]; then
+    # 使用 XDG 目录规范：Linux VPS 可自定义，macOS 未设置时也使用
+    # 用户目录；不依赖 /opt/homebrew 等平台路径。
+    local persistent_dir="${XDG_DATA_HOME:-$HOME/.local/share}/hermes"
+    local persistent_path="$persistent_dir/hms.sh"
+    mkdir -p "$persistent_dir" || {
+      echo "❌ 无法创建 Hermes 管理脚本目录：$persistent_dir"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+    cp "$script_path" "$persistent_path" || {
+      echo "❌ 无法保存 Hermes 管理脚本：$persistent_path"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+    chmod +x "$persistent_path"
+    script_path="$persistent_path"
+  fi
+
   patch_macos_mktemp_template "$script_path"
 
   # 4. 执行
