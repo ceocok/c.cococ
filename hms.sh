@@ -15,6 +15,10 @@ LOG_DIR="$HERMES_HOME/logs"
 LOG_FILE="$LOG_DIR/gateway.log"
 BACKUP_DIR="$HERMES_HOME/backups"
 SCRIPT_NAME="hms"
+# The official installer reads HERMES_HOME from the environment. Export it so
+# a custom data directory is honored consistently by the installer, Hermes,
+# and the launchd/systemd service it creates.
+export HERMES_HOME
 
 GREEN='\033[1;32m'
 YELLOW='\033[1;33m'
@@ -181,18 +185,49 @@ hermes_version(){ hermes --version 2>/dev/null | head -n1 || echo "unknown"; }
 
 run_hermes_installer(){
  local -a args=(--skip-setup)
- local log pid status elapsed=0 filled=0 empty=30 bar
+ local log pid status elapsed=0 filled=0 empty=30 bar uv_cache installer skip_node_deps
  local install_browser install_cua
  read -r -p "安装 Playwright/Chromium 浏览器？(y/N): " install_browser
  read -r -p "安装 CUA 桌面驱动？(y/N): " install_cua
  [[ "${install_browser:-}" =~ ^[Yy]$ ]] || args+=(--skip-browser)
  [[ "${install_cua:-}" =~ ^[Yy]$ ]] || args+=(--skip-computer-use)
+ skip_node_deps=false
+ if [[ ! "${install_browser:-}" =~ ^[Yy]$ ]] && [[ ! "${install_cua:-}" =~ ^[Yy]$ ]]; then
+  skip_node_deps=true
+ fi
+ # A stale root-owned ~/.cache/uv is common after an earlier sudo install.
+ # uv fails before dependency resolution if it cannot create a temporary file
+ # there, so isolate this run in a cache owned by the Hermes user.
+ uv_cache="$HERMES_HOME/cache/uv"
+ mkdir -p "$uv_cache" || {
+  echo "❌ 无法创建 Hermes uv 缓存目录：$uv_cache"
+  return 1
+ }
+ chmod 700 "$uv_cache" 2>/dev/null || true
+ installer=$(mktemp "${TMPDIR:-/tmp}/hermes-installer.XXXXXX") || {
+  echo "❌ 无法创建 Hermes 安装器临时文件。"
+  return 1
+ }
+ if ! curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh >"$installer"; then
+  echo "❌ 无法下载 Hermes 官方安装器。"
+  rm -f "$installer"
+  return 1
+ fi
+ if [ "$skip_node_deps" = true ]; then
+  # The upstream installer has no --skip-node-deps flag. When neither browser
+  # nor CUA is requested, bypass its Node check and npm workspace install so
+  # Electron is not downloaded for a headless Hermes installation.
+  sed -i.bak '0,/^check_node() {/s//check_node() { HAS_NODE=false; return 0; # hms skip node runtime/' "$installer"
+  sed -i.bak '0,/^install_node_deps() {/s//install_node_deps() { return 0; # hms skip node dependencies/' "$installer"
+  rm -f "$installer.bak"
+ fi
  log=$(mktemp "${TMPDIR:-/tmp}/hms-install.XXXXXX") || { echo "❌ 无法创建安装日志。"; return 1; }
  echo "⚙️ 正在下载安装 Hermes，安装过程已静默处理..."
  (
   set -o pipefail
-  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh |
-   bash -s -- "${args[@]}"
+  export HERMES_HOME
+  export UV_CACHE_DIR="$uv_cache"
+  bash "$installer" "${args[@]}"
  ) >"$log" 2>&1 &
  pid=$!
  while kill -0 "$pid" 2>/dev/null; do
@@ -210,9 +245,11 @@ run_hermes_installer(){
   echo "❌ Hermes 安装失败，以下是安装日志末尾："
   tail -n 80 "$log" 2>/dev/null || true
   rm -f "$log"
+  rm -f "$installer"
   return "$status"
  fi
  rm -f "$log"
+ rm -f "$installer"
  echo "✅ Hermes 安装完成。"
 }
 
@@ -255,7 +292,16 @@ install_hermes(){
   # The official installer may have installed the service already.  Do not
   # silently skip Telegram onboarding in that first-install scenario.
   if telegram_configured; then
-   echo "ℹ️ 已检测到 Telegram Token；可从菜单 [4] 修改消息平台配置。"
+   if telegram_dependency_ok; then
+    echo "ℹ️ 已检测到 Telegram Token；可从菜单 [4] 修改消息平台配置。"
+   else
+    echo "⚙️ 已检测到 Telegram 配置，但 Telegram 依赖缺失，正在修复..."
+    if repair_telegram_dependency && restart_gateway; then
+     echo "✅ Telegram 依赖已修复，Gateway 已重启。"
+    else
+     echo "⚠️ Telegram 依赖修复失败；可从菜单 [4] → [1] 重试。"
+    fi
+   fi
   else
    local configure_now
    read -r -p "尚未配置 Telegram。现在填写 Bot Token 和用户 ID？(Y/n): " configure_now
@@ -773,11 +819,16 @@ configure_telegram(){
  check_hermes || return 1
  local token uid
  echo -e "\n--- 配置 Telegram Bot ---"
- # Do not block credential collection when python-telegram-bot is absent.
- # Hermes lazily installs this optional dependency when the Telegram adapter
- # starts. The old preflight returned here before either prompt was shown.
+ # Install the optional adapter before touching credentials. launchd has no
+ # interactive stdin, so relying on Hermes's first-start lazy installer can
+ # leave a healthy-looking Gateway with no Telegram adapter.
  if ! telegram_dependency_ok; then
-  echo "ℹ️ 未安装 python-telegram-bot；保存配置并重启 Gateway 后，Hermes 会按需安装 Telegram 依赖。"
+  echo "ℹ️ 未安装 python-telegram-bot，正在先安装 Telegram 依赖..."
+  repair_telegram_dependency || {
+   echo "❌ Telegram 依赖安装失败，配置未修改。"
+   pause
+   return 1
+  }
  fi
  # Show the token while it is entered so the operator can verify it. It is
  # still written only to ~/.hermes/.env (mode 600); avoid pasting it into shell
@@ -875,13 +926,36 @@ PY
 }
 
 repair_telegram_dependency(){
- local py
+ local py uv spec uv_cache
  py=$(hermes_python) || { echo "❌ 找不到 Hermes 的 Python 运行环境。"; return 1; }
  # 先检查，不满足时才安装，避免每次配置均产生无意义网络操作。
  if telegram_dependency_ok; then
   return 0
  fi
- "$py" -m pip install --upgrade 'python-telegram-bot>=21,<23'
+ spec='python-telegram-bot[webhooks]==22.8'
+ uv_cache="$HERMES_HOME/cache/uv"
+ mkdir -p "$uv_cache" || {
+  echo "❌ 无法创建 Hermes uv 缓存目录：$uv_cache"
+  return 1
+ }
+ chmod 700 "$uv_cache" 2>/dev/null || true
+ uv="$HERMES_HOME/bin/uv"
+ [ -x "$uv" ] || uv=$(cmd_path uv)
+ if [ -n "$uv" ] && "$uv" --version >/dev/null 2>&1; then
+  # Hermes-managed venvs may intentionally omit pip. Install through the
+  # Hermes-owned uv and target the venv explicitly so launchd cannot select a
+  # host interpreter.
+  echo "⚙️ 正在使用 Hermes 自带 uv 安装 Telegram 依赖..."
+  UV_CACHE_DIR="$uv_cache" "$uv" pip install --python "$py" "$spec" || return 1
+ else
+  if ! "$py" -m pip --version >/dev/null 2>&1; then
+   "$py" -m ensurepip --upgrade --default-pip >/dev/null 2>&1 || {
+    echo "❌ Hermes venv 中没有可用的 uv/pip，无法安装 Telegram 依赖。"
+    return 1
+   }
+  fi
+  "$py" -m pip install --upgrade "$spec" || return 1
+ fi
  telegram_dependency_ok
 }
 
@@ -938,7 +1012,7 @@ gateway_logs_since_telegram_setup(){
 wait_for_telegram_connection(){
  local timeout="${1:-30}" elapsed=0
  while [ "$elapsed" -lt "$timeout" ]; do
-  if gateway_logs_since_telegram_setup | grep -Eiq 'telegram connected|Connected to Telegram'; then
+  if gateway_logs_since_telegram_setup | grep -Eiq 'telegram connected|connected to telegram|telegram.*(polling|ready|started)|polling.*(started|running)'; then
    return 0
   fi
   sleep 2
